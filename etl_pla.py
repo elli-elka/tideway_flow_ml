@@ -95,6 +95,8 @@ def main():
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
             for i, row in enumerate(heights):
+                row["flow_memory"] = current_flow
+                
                 ts = row.get("ts") or row.get("tstamp")
                 pred = row.get("predicted")
                 obs = row.get("observed")
@@ -131,17 +133,29 @@ def main():
                         elif pred < past_pred:
                             current_flow = "Ebb"
 
-                event = turns_lookup.get(ts)
+                    # --- 3. EVENT DETECTION (Physical Turn) ---
+                    event = None
+                    if i > 0:
+                        prev_flow = heights[i-1].get("flow_memory") 
+                        
+                        # If was Ebb and now Flood, then Low Event
+                        if prev_flow == "Ebb" and current_flow == "Flood":
+                            event = "Low"
+                        # If it was Flood and is now Ebb, then High Event
+                        elif prev_flow == "Flood" and current_flow == "Ebb":
+                            event = "High"
 
-                # --- 3. DATABASE UPSERT ---
+                    row["flow_memory"] = current_flow
+
+                # --- 4. DATABASE UPSERT ---
                 cur.execute(f"""
                     INSERT INTO {TABLE_NAME} (ts, predicted, observed, surge, tide_event, tidal_flow)
                     VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (ts) DO UPDATE 
                     SET observed = EXCLUDED.observed,
                         surge = EXCLUDED.surge,
-                        tide_event = COALESCE({TABLE_NAME}.tide_event, EXCLUDED.tide_event),
-                        tidal_flow = EXCLUDED.tidal_flow;
+                        tidal_flow = EXCLUDED.tidal_flow,
+                        tide_event = EXCLUDED.tide_event; 
                 """, (ts, pred, obs, surge, event, current_flow))
                 
                 inserted_updated += 1
