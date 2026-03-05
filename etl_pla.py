@@ -91,63 +91,57 @@ def main():
             current_flow = "Flood"
 
     # 4. Process and Insert
+    # --- 4. PROCESS AND INSERT (REFINED) ---
     inserted_updated = 0
+    # Threshold for a "real" change to prevent noise flip-flopping
+    CHANGE_THRESHOLD = 0.05 # 5cm
+
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
             for i, row in enumerate(heights):
-                row["flow_memory"] = current_flow
-                
-                ts = row.get("ts") or row.get("tstamp")
+                ts = row.get("tstamp")
                 pred = row.get("predicted")
                 obs = row.get("observed")
                 surge = row.get("surge")
 
-                # --- 1. SENSOR SPIKE FILTER ---
-                if i > 0 and obs is not None and heights[i-1].get("observed") is not None:
-                    diff = abs(obs - heights[i-1].get("observed"))
-                    if diff > 0.4: # Richmond doesn't jump 40cm in 5 mins
-                        obs = heights[i-1].get("observed") 
-                        if pred is not None:
-                            surge = round(obs - pred, 2)
-
-                # --- 2. PERSISTENT FLOW LOGIC (DIRECTIONAL MEMORY) ---
-                # We compare current water to 15 mins ago
-                lookback = 3 
+                # Initialize event as None
+                event = None
+                
+                # Use a wider lookback to determine flow (15-20 mins)
+                lookback = 4 
                 if i >= lookback:
                     past_obs = heights[i-lookback].get("observed")
                     past_pred = heights[i-lookback].get("predicted")
 
-                    # Primary: Observed data
+                    # 1. Determine Flow Direction with Hysteresis
                     if obs is not None and past_obs is not None:
-                        # Only switch if there is a clear 1cm move
-                        if obs > past_obs + 0.01:
-                            current_flow = "Flood"
-                        elif obs < past_obs - 0.01:
-                            current_flow = "Ebb"
-                        # Else: Keep current_flow as it was (Memory)
-                    
-                    # Secondary: Fallback to Predicted
-                    elif pred is not None and past_pred is not None:
-                        if pred > past_pred:
-                            current_flow = "Flood"
-                        elif pred < past_pred:
-                            current_flow = "Ebb"
+                        # Require a 5cm movement to change direction
+                        if obs > past_obs + CHANGE_THRESHOLD:
+                            new_flow = "Flood"
+                        elif obs < past_obs - CHANGE_THRESHOLD:
+                            new_flow = "Ebb"
+                        else:
+                            new_flow = current_flow # No significant change, maintain memory
+                    else:
+                        # Fallback to Predicted logic if observed is missing
+                        new_flow = "Flood" if (pred or 0) > (past_pred or 0) else "Ebb"
 
-                    # --- 3. EVENT DETECTION (Physical Turn) ---
-                    event = None
-                    if i > 0:
-                        prev_flow = heights[i-1].get("flow_memory") 
-                        
-                        # If was Ebb and now Flood, then Low Event
-                        if prev_flow == "Ebb" and current_flow == "Flood":
+                    # 2. Event Detection (The Turn)
+                    # Only trigger an event if the flow direction actually flipped
+                    if current_flow == "Ebb" and new_flow == "Flood":
+                        # Sanity Check: Is predicted level actually low? (Prevents noise-highs)
+                        if pred is not None and pred < 2.5: 
                             event = "Low"
-                        # If it was Flood and is now Ebb, then High Event
-                        elif prev_flow == "Flood" and current_flow == "Ebb":
+                    elif current_flow == "Flood" and new_flow == "Ebb":
+                        # Sanity Check: Is predicted level actually high?
+                        if pred is not None and pred > 3.5:
                             event = "High"
 
-                    row["flow_memory"] = current_flow
+                    current_flow = new_flow
+                
+                row["flow_memory"] = current_flow
 
-                # --- 4. DATABASE UPSERT ---
+                # 3. UPSERT
                 cur.execute(f"""
                     INSERT INTO {TABLE_NAME} (ts, predicted, observed, surge, tide_event, tidal_flow)
                     VALUES (%s, %s, %s, %s, %s, %s)
@@ -155,9 +149,8 @@ def main():
                     SET observed = EXCLUDED.observed,
                         surge = EXCLUDED.surge,
                         tidal_flow = EXCLUDED.tidal_flow,
-                        tide_event = EXCLUDED.tide_event; 
+                        tide_event = EXCLUDED.tide_event;
                 """, (ts, pred, obs, surge, event, current_flow))
-                
                 inserted_updated += 1
                 
         conn.commit()
