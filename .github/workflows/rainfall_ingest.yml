@@ -1,0 +1,29 @@
+name: Daily Isfield Rainfall Ingest
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # Runs every 6 hours (00:00, 06:00, 12:00, 18:00)
+  workflow_dispatch:        # This lets you click "Run workflow" manually to test
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests psycopg[binary] python-dotenv 
+
+      - name: Run ingestion script
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python ingest_isfield_rain.py
