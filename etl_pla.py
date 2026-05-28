@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 TABLE_NAME = "richmond_pla_levels"
 API_URL = "https://pla.co.uk/pla-proxy/one-minute?url=tides/chart/14541"
 
+
 # --------------------------------------------------
 # UTILS
 # --------------------------------------------------
@@ -31,7 +32,7 @@ def round_to_nearest_5_mins(ts_str):
 # --------------------------------------------------
 
 def main():
-    load_dotenv()
+    load_dotenv(override=True)
     database_url = os.getenv("DATABASE_URL")
 
     if not database_url:
@@ -61,6 +62,14 @@ def main():
         response = requests.get(API_URL, timeout=30)
         response.raise_for_status()
         raw_data = response.json()
+
+                
+        print(f"Raw response keys: {raw_data.keys()}")
+        print(f"Heights count: {len(heights)}, Tpoints count: {len(tpoints)}")
+        print(f"First height sample: {heights[:2] if heights else 'EMPTY'}")
+
+        
+        
     except Exception as e:
         print(f"Fetch failed: {e}")
         return
