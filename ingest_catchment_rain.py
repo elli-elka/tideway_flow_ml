@@ -3,7 +3,8 @@ Daily rainfall across the Thames catchment upstream of Teddington, from Open-Met
 (free, no API key, non-commercial use).
 
 Two tables:
-  catchment_rain_daily     observed/reanalysis rainfall per point per day (ERA5-based,
+  catchment_rain_daily     observed/reanalysis rainfall and reference evapotranspiration
+                           (et0, how much water evaporates) per point per day (ERA5-based,
                            back to 1940; lags real time by ~5 days)
   catchment_rain_forecast  a snapshot of the 16-day forecast, saved every day it runs.
                            Keeping every snapshot lets you train/evaluate the model on
@@ -92,18 +93,20 @@ def ingest_history(cur, session):
             **params,
             "start_date": chunk_start.isoformat(),
             "end_date": chunk_end.isoformat(),
-            "daily": "precipitation_sum",
+            "daily": "precipitation_sum,et0_fao_evapotranspiration",
         })
         rows = []
         for name, result in zip(names, results):
             daily = result["daily"]
-            for day, precip in zip(daily["time"], daily["precipitation_sum"]):
+            et0s = daily.get("et0_fao_evapotranspiration") or [None] * len(daily["time"])
+            for day, precip, et0 in zip(daily["time"], daily["precipitation_sum"], et0s):
                 if precip is not None:
-                    rows.append((day, name, precip))
+                    rows.append((day, name, precip, et0))
         cur.executemany(f"""
-            INSERT INTO {HISTORY_TABLE} (day, point, precip_mm)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (day, point) DO UPDATE SET precip_mm = EXCLUDED.precip_mm;
+            INSERT INTO {HISTORY_TABLE} (day, point, precip_mm, et0_mm)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (day, point) DO UPDATE
+            SET precip_mm = EXCLUDED.precip_mm, et0_mm = EXCLUDED.et0_mm;
         """, rows)
         cur.connection.commit()  # keep progress if a later chunk fails
         total += len(rows)
@@ -117,7 +120,7 @@ def ingest_forecast(cur, session):
     issued = datetime.now(timezone.utc).date()
     results = get_json_list(session, FORECAST_URL, {
         **params,
-        "daily": "precipitation_sum,precipitation_probability_max",
+        "daily": "precipitation_sum,precipitation_probability_max,et0_fao_evapotranspiration",
         "forecast_days": 16,
         "models": FORECAST_MODEL,
     })
@@ -125,19 +128,20 @@ def ingest_forecast(cur, session):
     for name, result in zip(names, results):
         daily = result["daily"]
         probs = daily.get("precipitation_probability_max") or [None] * len(daily["time"])
-        for day, precip, prob in zip(daily["time"], daily["precipitation_sum"], probs):
+        et0s = daily.get("et0_fao_evapotranspiration") or [None] * len(daily["time"])
+        for day, precip, prob, et0 in zip(daily["time"], daily["precipitation_sum"], probs, et0s):
             if precip is None:
                 continue
             lead = (date.fromisoformat(day) - issued).days
-            rows.append((issued, day, name, FORECAST_MODEL, lead, precip, prob))
+            rows.append((issued, day, name, FORECAST_MODEL, lead, precip, prob, et0))
     if not rows:
         print("ERROR: forecast returned no data")
         sys.exit(1)
     cur.executemany(f"""
-        INSERT INTO {FORECAST_TABLE} (issued_date, target_day, point, model, lead_days, precip_mm, precip_prob)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO {FORECAST_TABLE} (issued_date, target_day, point, model, lead_days, precip_mm, precip_prob, et0_mm)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (issued_date, target_day, point, model) DO UPDATE
-        SET precip_mm = EXCLUDED.precip_mm, precip_prob = EXCLUDED.precip_prob;
+        SET precip_mm = EXCLUDED.precip_mm, precip_prob = EXCLUDED.precip_prob, et0_mm = EXCLUDED.et0_mm;
     """, rows)
     print(f"Saved {len(rows)} forecast rows (issued {issued}, model {FORECAST_MODEL}).")
 
@@ -153,6 +157,7 @@ def main():
                     day DATE NOT NULL,
                     point TEXT NOT NULL,
                     precip_mm DOUBLE PRECISION NOT NULL,
+                    et0_mm DOUBLE PRECISION,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     PRIMARY KEY (day, point)
                 );
@@ -164,6 +169,7 @@ def main():
                     lead_days INTEGER NOT NULL,
                     precip_mm DOUBLE PRECISION NOT NULL,
                     precip_prob DOUBLE PRECISION,
+                    et0_mm DOUBLE PRECISION,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     PRIMARY KEY (issued_date, target_day, point, model)
                 );
