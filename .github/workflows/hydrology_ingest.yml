@@ -1,9 +1,9 @@
-name: EA Richmond Tidal Levels Ingest
+name: EA Hydrology Ingest (upstream flows + groundwater)
 
 on:
   schedule:
-    - cron: "23 */6 * * *"   # off the top of the hour, when GitHub drops/delays fewer scheduled runs
-  workflow_dispatch:        # "Run workflow" button; optionally backfill from a date
+    - cron: "29 7 * * *"   # daily; the Hydrology API publishes quality-checked daily values
+  workflow_dispatch:
     inputs:
       since:
         description: "Backfill from this date (YYYY-MM-DD). Leave empty for a normal incremental run."
@@ -30,26 +30,19 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt -r requirements-ml.txt
+          pip install -r requirements.txt
 
-      - name: Run ingestion script
+      - name: Upstream river flows
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           PYTHONUNBUFFERED: "1"
         run: |
-          python ingest_ea_levels.py "${{ inputs.since }}"
+          python ingest_upstream_flows.py "${{ inputs.since }}"
 
-      - name: Rebuild ebb tide flag history
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          RICHMOND_CD_OFFSET: ${{ vars.RICHMOND_CD_OFFSET }}
-          PYTHONUNBUFFERED: "1"
-        run: |
-          python build_ebb_flags.py
-
-      - name: Predict flags for the next 7 days
+      - name: Groundwater levels
+        if: always()
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           PYTHONUNBUFFERED: "1"
         run: |
-          python predict_flags.py
+          python ingest_groundwater.py "${{ inputs.since }}"
