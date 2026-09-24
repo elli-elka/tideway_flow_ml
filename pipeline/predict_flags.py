@@ -288,6 +288,7 @@ def evaluate(df, features):
     issues = np.sort(df.issued_at.unique())
     cut = issues[int(len(issues) * (1 - TEST_FRACTION))]
     train, test = df[df.issued_at < cut], df[df.issued_at >= cut]
+    features = [c for c in features if train[c].notna().sum() >= 2 and train[c].nunique() > 1]
     models = fit_models(train, features)
     truth = test.target_level.map(flag_for)
 
@@ -345,6 +346,7 @@ def main():
                   f"    | {r.acc_same_as_now:>25.0%} {r.acc_ridge:>5.0%} {r.acc_gbm:>4.0%}  | {r.method}")
 
         # Fit on everything and forecast from the latest issue
+        features = [c for c in features if df[c].notna().sum() >= 2 and df[c].nunique() > 1]
         models = fit_models(df, features)
         i_last = len(flags) - 1
         t_last = flags.issued_at.iloc[i_last]
