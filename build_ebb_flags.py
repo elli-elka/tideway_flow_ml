@@ -40,6 +40,12 @@ UK = ZoneInfo("Europe/London")
 ISSUE_HOURS = (6, 18)
 WINDOW = timedelta(hours=12)
 MIN_READINGS = 36          # of 48 possible 15-min readings in the 12h window
+# Sanity limits for readings. The EA gauge occasionally reports single-sensor
+# spikes (e.g. -5.9 mAOD on 24 Apr 2026 when the true level was ~0 mAOD), which
+# would otherwise become false BLACK flags.
+EA_PLAUSIBLE = (-2.0, 7.0)    # mAOD; normal low water is about -0.95
+PLA_PLAUSIBLE = (-1.5, 8.0)   # m above chart datum
+MAX_SPIKE = 1.0               # m away from the median of the neighbouring readings
 MIN_CALIBRATION_LOWS = 4      # low-water pairs needed to calibrate the offset
 
 
@@ -60,6 +66,20 @@ def flag_for(level_cd):
 def table_exists(cur, name):
     cur.execute("SELECT to_regclass(%s) IS NOT NULL;", (name,))
     return cur.fetchone()[0]
+
+
+def drop_spikes(rows, plausible):
+    """Remove readings outside the plausible range or far from their neighbours.
+    `rows` is a ts-sorted list of (ts, level)."""
+    lo_ok, hi_ok = plausible
+    rows = [r for r in rows if lo_ok <= r[1] <= hi_ok]
+    clean = []
+    for i, (ts, level) in enumerate(rows):
+        neighbours = [r[1] for r in rows[max(0, i - 2):i] + rows[i + 1:i + 3]]
+        if len(neighbours) >= 2 and abs(level - statistics.median(neighbours)) > MAX_SPIKE:
+            continue
+        clean.append((ts, level))
+    return clean
 
 
 def window_min(series, start, end):
@@ -84,12 +104,12 @@ def get_offset(cur, have_pla, have_ea):
     if not (have_pla and have_ea):
         return None, None
     cur.execute(f"SELECT ts, observed FROM {PLA_TABLE} WHERE observed IS NOT NULL ORDER BY ts;")
-    pla = cur.fetchall()
+    pla = drop_spikes(cur.fetchall(), PLA_PLAUSIBLE)
     if not pla:
         return None, None
     cur.execute(f"SELECT ts, water_level FROM {EA_TABLE} WHERE ts BETWEEN %s AND %s ORDER BY ts;",
                 (pla[0][0], pla[-1][0]))
-    ea = cur.fetchall()
+    ea = drop_spikes(cur.fetchall(), EA_PLAUSIBLE)
 
     diffs = []
     for issued in issue_times(pla[0][0], pla[-1][0]):
@@ -157,18 +177,22 @@ def main():
             levels = {}
             if have_ea and offset is not None:
                 cur.execute(f"""
-                    SELECT ts, water_level + %s FROM {EA_TABLE}
-                    WHERE %s::timestamptz IS NULL OR ts > %s::timestamptz - INTERVAL '12 hours';
-                """, (offset, since, since))
-                levels.update({ts: (lvl, "ea") for ts, lvl in cur.fetchall()})
+                    SELECT ts, water_level FROM {EA_TABLE}
+                    WHERE %s::timestamptz IS NULL OR ts > %s::timestamptz - INTERVAL '12 hours'
+                    ORDER BY ts;
+                """, (since, since))
+                ea_rows = drop_spikes(cur.fetchall(), EA_PLAUSIBLE)
+                levels.update({ts: (lvl + offset, "ea") for ts, lvl in ea_rows})
             if have_pla:
                 cur.execute(f"""
                     SELECT ts, observed FROM {PLA_TABLE}
                     WHERE observed IS NOT NULL
                       AND EXTRACT(MINUTE FROM ts)::int %% 15 = 0
-                      AND (%s::timestamptz IS NULL OR ts > %s::timestamptz - INTERVAL '12 hours');
+                      AND (%s::timestamptz IS NULL OR ts > %s::timestamptz - INTERVAL '12 hours')
+                    ORDER BY ts;
                 """, (since, since))
-                levels.update({ts: (lvl, "pla") for ts, lvl in cur.fetchall()})
+                pla_rows = drop_spikes(cur.fetchall(), PLA_PLAUSIBLE)
+                levels.update({ts: (lvl, "pla") for ts, lvl in pla_rows})
 
             if not levels:
                 print("No calibrated Richmond levels available yet; nothing to build.")
