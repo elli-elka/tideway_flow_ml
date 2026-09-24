@@ -1,8 +1,8 @@
-name: EA Richmond Tidal Levels Ingest
+name: EA Kingston Flow Ingest
 
 on:
   schedule:
-    - cron: "23 */6 * * *"   # off the top of the hour, when GitHub drops/delays fewer scheduled runs
+    - cron: "53 */6 * * *"   # off the top of the hour, when GitHub drops/delays fewer scheduled runs
   workflow_dispatch:        # "Run workflow" button; optionally backfill from a date
     inputs:
       since:
@@ -37,12 +37,4 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           PYTHONUNBUFFERED: "1"
         run: |
-          python ingest_ea_levels.py "${{ inputs.since }}"
-
-      - name: Rebuild ebb tide flag history
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          RICHMOND_CD_OFFSET: ${{ vars.RICHMOND_CD_OFFSET }}
-          PYTHONUNBUFFERED: "1"
-        run: |
-          python build_ebb_flags.py
+          python ingest_kingston_flow.py "${{ inputs.since }}"
