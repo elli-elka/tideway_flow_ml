@@ -9,21 +9,27 @@ struct FlagView: View {
             VStack(spacing: 16) {
                 if let feed = store.feed {
                     FeedStatusBanner(feed: feed, source: store.feedSource, error: store.feedError)
-                    CurrentFlagCard(issue: feed.currentFlag, stream: feed.richmond?.stream)
+                    CurrentFlagCard(issue: feed.currentFlag, stream: store.tide?.stream ?? feed.richmond?.stream)
                     OfficialFlagCard()
                     if let predictions = feed.predictions {
                         PredictionsCard(predictions: predictions, rain: feed.rainForecast ?? [])
                     }
-                    if let richmond = feed.richmond {
-                        RichmondCard(richmond: richmond)
+                    if let tide = store.tide {
+                        TideChartCard(tide: tide)
                     }
                     HStack(alignment: .top, spacing: 16) {
                         if let flow = feed.kingstonFlow { KingstonCard(flow: flow) }
-                        if let tides = feed.tides, !tides.isEmpty { TidesCard(tides: tides) }
+                        if let turns = store.liveTide?.upcomingTurns, !turns.isEmpty {
+                            TidesCard(tides: turns.map { TideEvent(t: $0.time, type: $0.isHigh ? "high" : "low",
+                                                                   predictedCd: $0.level ?? .nan) })
+                        } else if let tides = feed.tides, !tides.isEmpty {
+                            TidesCard(tides: tides)
+                        }
                     }
                     DisclaimerCard(text: feed.disclaimer, url: feed.officialFlagUrl)
                 } else {
                     OfficialFlagCard()
+                    if let tide = store.tide { TideChartCard(tide: tide) }
                     GlassCard(tint: .orange) {
                         Label("Predictions unavailable", systemImage: "exclamationmark.triangle.fill")
                             .font(.headline)
@@ -39,7 +45,10 @@ struct FlagView: View {
         }
         .screenBackground(store.feed?.currentFlag?.flag)
         .navigationTitle("Ebb Tide Flag")
-        .refreshable { await store.refreshFeed() }
+        .refreshable {
+            await store.refreshFeed()
+            await store.refreshLiveTide()
+        }
     }
 }
 
@@ -131,14 +140,17 @@ private struct CurrentFlagCard: View {
 
 /// The PLA's own widget: the authoritative current flag.
 private struct OfficialFlagCard: View {
+    @State private var widgetSize = CGSize(width: 382, height: 442)
+
     var body: some View {
         GlassCard {
             CardHeader(title: "Official PLA flag", systemImage: "checkmark.seal.fill", trailing: "pla.co.uk")
-            PLAFlagWidget()
-                .aspectRatio(PLAFlagWidget.aspectRatio, contentMode: .fit)
-                .frame(maxWidth: PLAFlagWidget.visibleSize.width)
+            PLAFlagWidget(contentSize: $widgetSize)
+                .aspectRatio(widgetSize.width / widgetSize.height, contentMode: .fit)
+                .frame(maxWidth: min(widgetSize.width, 420))
                 .frame(maxWidth: .infinity)
                 .clipShape(.rect(cornerRadius: 18))
+                .animation(.snappy, value: widgetSize)
         }
     }
 }
@@ -276,58 +288,6 @@ private struct PredictionDetail: View {
     }
 }
 
-private struct RichmondCard: View {
-    let richmond: Richmond
-
-    var body: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 10) {
-                CardHeader(title: "Richmond level", systemImage: "water.waves",
-                           trailing: UKTime.hm(richmond.latestAt))
-                Text("\(richmond.levelCd, format: .number.precision(.fractionLength(2))) m above chart datum")
-                    .font(.title3.weight(.semibold))
-                Chart {
-                    ForEach(richmond.series) { point in
-                        AreaMark(x: .value("Time", point.t), y: .value("Level", point.levelCd))
-                            .foregroundStyle(.linearGradient(colors: [.cyan.opacity(0.35), .clear],
-                                                             startPoint: .top, endPoint: .bottom))
-                        LineMark(x: .value("Time", point.t), y: .value("Level", point.levelCd))
-                            .foregroundStyle(.cyan)
-                            .interpolationMethod(.catmullRom)
-                    }
-                    ForEach(FlagThreshold.all) { threshold in
-                        RuleMark(y: .value("Threshold", threshold.level))
-                            .foregroundStyle(threshold.colour == .black ? Color.white.opacity(0.5) : threshold.colour.color)
-                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                            .annotation(position: .top, alignment: .leading) {
-                                Text(threshold.label)
-                                    .font(.caption2).foregroundStyle(.secondary)
-                            }
-                    }
-                }
-                .chartYAxisLabel("m CD")
-                .frame(height: 190)
-                Text("The flag uses the lowest reading in the 12 hours before 06:00 and 18:00.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-}
-
-/// Lines drawn on the Richmond chart where the flag changes colour.
-private struct FlagThreshold: Identifiable {
-    let level: Double
-    let colour: FlagColour
-    let label: String
-    var id: Double { level }
-
-    static let all = [
-        FlagThreshold(level: 0.0, colour: .black, label: "0 m: black below"),
-        FlagThreshold(level: 1.7, colour: .yellow, label: "1.7 m: yellow"),
-        FlagThreshold(level: 2.6, colour: .red, label: "2.6 m: red"),
-    ]
-}
-
 private struct KingstonCard: View {
     let flow: KingstonFlow
 
@@ -367,8 +327,10 @@ private struct TidesCard: View {
                             .foregroundStyle(tide.isHigh ? .cyan : .secondary)
                         Text(UKTime.dayHM(tide.t))
                         Spacer()
-                        Text("\(tide.predictedCd, format: .number.precision(.fractionLength(1))) m")
-                            .foregroundStyle(.secondary)
+                        if tide.predictedCd.isFinite {
+                            Text("\(tide.predictedCd, format: .number.precision(.fractionLength(1))) m")
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .font(.subheadline)
                 }

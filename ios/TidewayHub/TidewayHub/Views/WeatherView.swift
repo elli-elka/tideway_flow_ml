@@ -1,3 +1,4 @@
+import CoreLocation
 import Charts
 import SwiftUI
 
@@ -21,9 +22,7 @@ struct WeatherView: View {
                         ObservationsCard(observations: store.observations, unit: unit)
                     }
                     HourlyCard(hours: weather.next24Hours, unit: unit)
-                    if let today = weather.days.first {
-                        DaylightCard(day: today)
-                    }
+                    DaylightCard(coordinate: store.coordinate)
                     DailyCard(days: weather.days, unit: unit)
                     Text("Forecast: Met Office UKMO model via Open-Meteo (CC BY 4.0). Measured wind: aviationweather.gov.")
                         .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -99,7 +98,7 @@ private struct ObservationsCard: View {
                         }
                         Text(unit.format(obs.speedKn)).font(.subheadline.weight(.semibold))
                         if let gust = obs.gustKn {
-                            Text("G\(Int(unit.value(fromKnots: gust).rounded()))")
+                            Text("gust \(Int(unit.value(fromKnots: gust).rounded()))")
                                 .font(.caption.weight(.semibold)).foregroundStyle(.orange)
                         }
                     }
@@ -165,24 +164,50 @@ private struct HourlyCard: View {
     }
 }
 
+/// First light, sunrise, sunset and last light for today and tomorrow. After today's
+/// last light, tomorrow comes first: that's what a cox planning an early outing needs.
 private struct DaylightCard: View {
-    let day: WeatherForecast.Day
+    let coordinate: CLLocationCoordinate2D
 
     var body: some View {
+        let now = Date()
+        let today = SunTimes.day(containing: now, at: coordinate)
+        let tomorrow = SunTimes.day(containing: now.addingTimeInterval(86400), at: coordinate)
+        let evening = (today.lastLight ?? today.sunset ?? now) < now
+        let columns = evening ? [("Tomorrow", tomorrow), ("Today", today)] : [("Today", today), ("Tomorrow", tomorrow)]
+
         GlassCard {
-            HStack {
-                if let sunrise = day.sunrise {
-                    Label(UKTime.hm(sunrise), systemImage: "sunrise.fill")
-                }
-                Spacer()
-                if let sunset = day.sunset {
-                    Label(UKTime.hm(sunset), systemImage: "sunset.fill")
+            CardHeader(title: "Daylight", systemImage: "sun.horizon.fill")
+            HStack(alignment: .top, spacing: 12) {
+                ForEach(columns.indices, id: \.self) { index in
+                    let title = columns[index].0
+                    let day = columns[index].1
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(title).font(.subheadline.weight(.semibold))
+                        row("First light", day.firstLight, "sun.haze")
+                        row("Sunrise", day.sunrise, "sunrise.fill")
+                        row("Sunset", day.sunset, "sunset.fill")
+                        row("Last light", day.lastLight, "moon.haze")
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .glassEffect(index == 0 ? .regular.tint(.yellow.opacity(0.18)) : .regular,
+                                 in: .rect(cornerRadius: 18))
                 }
             }
-            .font(.headline)
-            .symbolRenderingMode(.multicolor)
-            Text("Boats need lights on the Tideway in darkness and poor visibility; check the Tideway Code.")
-                .font(.caption).foregroundStyle(.secondary)
+            Text("First and last light are civil twilight (sun 6° below the horizon). Boats need lights on the Tideway in darkness and poor visibility; check the Tideway Code.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    private func row(_ title: String, _ time: Date?, _ symbol: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+                .symbolRenderingMode(.multicolor)
+                .frame(width: 20)
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            Text(time.map(UKTime.hm) ?? "–").font(.subheadline.weight(.semibold)).monospacedDigit()
         }
     }
 }
@@ -210,7 +235,7 @@ private struct DailyCard: View {
                             .font(.caption).foregroundStyle(.blue)
                             .frame(width: 58, alignment: .leading)
                         Spacer()
-                        Text(unit.format(day.windMaxKn) + " · G" + gust(day.gustMaxKn))
+                        Text(unit.format(day.windMaxKn) + " · gust " + gust(day.gustMaxKn))
                             .font(.caption).foregroundStyle(.secondary)
                         Text(degrees(day.low) + " / " + degrees(day.high))
                             .font(.subheadline.weight(.medium))

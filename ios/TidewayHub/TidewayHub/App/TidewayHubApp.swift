@@ -8,7 +8,10 @@ struct TidewayHubApp: App {
         WindowGroup {
             RootView()
                 .environment(store)
-                .task { await store.refreshAll() }
+                .task {
+                    await store.refreshAll()
+                    await store.autoRefresh()
+                }
         }
     }
 }

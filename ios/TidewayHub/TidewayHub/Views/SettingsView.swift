@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(AppStore.self) private var store
     @AppStorage(SettingsKey.windUnit) private var unitRaw = WindUnit.knots.rawValue
+    @AppStorage(SettingsKey.showDiagnostics) private var showDiagnostics = false
 
     var body: some View {
         Form {
@@ -41,6 +42,13 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("Show diagnostics", isOn: $showDiagnostics)
+            } header: {
+                Text("Advanced")
+            }
+
+            if showDiagnostics {
+            Section {
                 ForEach(Diagnostics.shared.sorted) { entry in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
@@ -66,6 +74,7 @@ struct SettingsView: View {
                 Text("Diagnostics")
             } footer: {
                 Text("What each data source last returned. Screenshot this if something looks wrong.")
+            }
             }
         }
         .scrollContentBackground(.hidden)

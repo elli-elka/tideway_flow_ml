@@ -208,6 +208,7 @@ def main():
                 "kingston_flow": kingston_section(cur),
                 "tides": tides_section(cur),
                 "rain_forecast": rain_forecast_section(cur),
+                "richmond_cd_offset": rounded(offset) if offset is not None else None,
             }
 
     os.makedirs(out_dir, exist_ok=True)

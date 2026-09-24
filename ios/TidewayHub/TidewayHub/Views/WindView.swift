@@ -17,6 +17,8 @@ struct WindView: View {
                     .frame(height: 340)
                     .clipShape(.rect(cornerRadius: 28))
                     .glassEffect(.regular, in: .rect(cornerRadius: 28))
+                Text("Map shows forecast wind speed now (\(unit.rawValue)); arrows point the way it's blowing.")
+                    .font(.caption2).foregroundStyle(.secondary)
 
                 if let wind = store.windHere {
                     CrewWindCard(wind: wind, reach: store.reach, stream: store.feed?.richmond?.stream,
@@ -52,16 +54,15 @@ private struct CourseMap: View {
             ForEach(Tideway.stations) { station in
                 Annotation(station.name, coordinate: station.coordinate, anchor: .center) {
                     if let wind = winds[station] {
-                        VStack(spacing: 2) {
-                            WindArrow(fromDegrees: wind.fromDegrees, size: 16)
-                            Text(unit.format(wind.speedKn)).font(.caption2.weight(.bold))
-                            if let gust = wind.gustKn {
-                                Text("G\(Int(unit.value(fromKnots: gust).rounded()))")
-                                    .font(.caption2).foregroundStyle(.orange)
-                            }
+                        // Kept compact so neighbouring bridges don't overlap: arrow + speed
+                        HStack(spacing: 3) {
+                            WindArrow(fromDegrees: wind.fromDegrees, size: 11)
+                            Text("\(Int(unit.value(fromKnots: wind.speedKn).rounded()))")
+                                .font(.caption2.weight(.bold))
+                                .monospacedDigit()
                         }
-                        .padding(6)
-                        .glassEffect(.regular, in: .rect(cornerRadius: 12))
+                        .padding(.horizontal, 7).padding(.vertical, 4)
+                        .glassEffect(.regular, in: .capsule)
                     } else {
                         Circle().fill(.cyan).frame(width: 10, height: 10)
                     }
@@ -155,7 +156,7 @@ private struct WindyCard: View {
                                 WindArrow(fromDegrees: w.fromDegrees, size: 13)
                                 Text("\(Int(unit.value(fromKnots: w.speedKn).rounded()))").font(.subheadline.weight(.semibold))
                                 if let gust = w.gustKn {
-                                    Text("G\(Int(unit.value(fromKnots: gust).rounded()))").font(.caption2).foregroundStyle(.orange)
+                                    Text("gust \(Int(unit.value(fromKnots: gust).rounded()))").font(.caption2).foregroundStyle(.orange)
                                 }
                             }
                         }

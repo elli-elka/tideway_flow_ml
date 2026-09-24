@@ -14,6 +14,8 @@ struct Feed: Codable, Sendable {
     let tides: [TideEvent]?
     /// Catchment-average rain forecast for the coming week (feeds the predictions).
     let rainForecast: [RainDay]?
+    /// Chart datum offset for the EA Richmond gauge (level_cd = level_maod + offset).
+    let richmondCdOffset: Double?
 
     // Field names are mapped explicitly (no automatic snake_case conversion, which
     // mangled names containing digits such as flow_m3s).
@@ -25,6 +27,7 @@ struct Feed: Codable, Sendable {
         case recentFlags = "recent_flags"
         case kingstonFlow = "kingston_flow"
         case rainForecast = "rain_forecast"
+        case richmondCdOffset = "richmond_cd_offset"
     }
 
     static let decoder: JSONDecoder = {
