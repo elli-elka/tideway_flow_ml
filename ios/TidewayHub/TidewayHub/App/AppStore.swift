@@ -21,12 +21,9 @@ final class AppStore {
     var lastRefresh: Date?
     let location = LocationManager()
 
-    // Settings (edited in More via @AppStorage with the same keys)
+    // Developer overrides (not shown in the UI)
     private var feedURLString: String {
         UserDefaults.standard.string(forKey: SettingsKey.feedURL) ?? FeedService.defaultURL.absoluteString
-    }
-    private var windyAPIKey: String {
-        UserDefaults.standard.string(forKey: SettingsKey.windyAPIKey) ?? ""
     }
 
     /// Your position if shared, otherwise Putney.
@@ -54,12 +51,30 @@ final class AppStore {
         lastRefresh = Date()
     }
 
+    init() {
+        // Show something immediately; the live feed replaces it when it arrives
+        let offline = FeedService().loadOffline()
+        feed = offline.feed
+        feedSource = offline.source
+        feedError = offline.error
+    }
+
     func refreshFeed() async {
         let url = URL(string: feedURLString) ?? FeedService.defaultURL
-        let (feed, source, error) = await FeedService().load(from: url)
-        self.feed = feed
-        self.feedSource = source
-        self.feedError = error
+        let live = await FeedService().loadLive(from: url)
+        if let fresh = live.feed {
+            feed = fresh
+            feedSource = .live
+            feedError = nil
+        } else {
+            feedError = live.error
+            if feed == nil {
+                let offline = FeedService().loadOffline()
+                feed = offline.feed
+                feedSource = offline.source
+                feedError = [live.error, offline.error].compactMap { $0 }.joined(separator: " ")
+            }
+        }
     }
 
     func refreshWeather() async {
@@ -82,9 +97,11 @@ final class AppStore {
         courseWind = Dictionary(uniqueKeysWithValues: zip(stations, winds))
     }
 
+    /// True when a Windy key was built into the app (see ios/README.md).
+    var hasWindy: Bool { WindyService.bundledKey != nil }
+
     func refreshWindy() async {
-        let key = windyAPIKey.trimmingCharacters(in: .whitespaces)
-        guard !key.isEmpty else {
+        guard let key = WindyService.bundledKey else {
             windy = []
             windyError = nil
             return
@@ -100,6 +117,5 @@ final class AppStore {
 
 enum SettingsKey {
     static let feedURL = "feedURL"
-    static let windyAPIKey = "windyAPIKey"
     static let windUnit = "windUnit"
 }

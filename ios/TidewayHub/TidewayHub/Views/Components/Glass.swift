@@ -11,10 +11,15 @@ struct GlassCard<Content: View>: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .glassEffect(glass, in: .rect(cornerRadius: cornerRadius))
+            // Cards settle into place as they scroll on and off screen
+            .scrollTransition(.interactive, axis: .vertical) { view, phase in
+                view.scaleEffect(phase.isIdentity ? 1 : 0.94)
+                    .opacity(phase.isIdentity ? 1 : 0.7)
+            }
     }
 
     private var glass: Glass {
-        if let tint { return .regular.tint(tint.opacity(0.45)) }
+        if let tint { return .regular.tint(tint.opacity(0.3)) }
         return .regular
     }
 }
@@ -38,19 +43,6 @@ struct CardHeader: View {
     }
 }
 
-/// Soft gradient behind each screen, tinted by the current flag so the glass has
-/// something to refract.
-struct FlagBackground: View {
-    let flag: FlagColour?
-
-    var body: some View {
-        let base = flag?.color ?? .accentColor
-        LinearGradient(colors: [base.opacity(0.55), Color(red: 0.05, green: 0.2, blue: 0.35), .black.opacity(0.9)],
-                       startPoint: .top, endPoint: .bottom)
-            .ignoresSafeArea()
-    }
-}
-
 /// Arrow pointing the way the wind is blowing (i.e. away from where it comes from).
 struct WindArrow: View {
     let fromDegrees: Double
@@ -65,8 +57,8 @@ struct WindArrow: View {
 }
 
 extension View {
-    /// Standard screen chrome: flag-tinted background behind a scrolling column.
+    /// Standard screen chrome: the animated river background, tinted by the flag.
     func screenBackground(_ flag: FlagColour?) -> some View {
-        background { FlagBackground(flag: flag) }
+        background { RiverBackground(flag: flag) }
     }
 }

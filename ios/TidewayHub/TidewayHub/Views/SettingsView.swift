@@ -3,8 +3,6 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(AppStore.self) private var store
     @AppStorage(SettingsKey.windUnit) private var unitRaw = WindUnit.knots.rawValue
-    @AppStorage(SettingsKey.windyAPIKey) private var windyKey = ""
-    @AppStorage(SettingsKey.feedURL) private var feedURL = FeedService.defaultURL.absoluteString
 
     var body: some View {
         Form {
@@ -13,17 +11,6 @@ struct SettingsView: View {
                     ForEach(WindUnit.allCases) { Text($0.rawValue).tag($0.rawValue) }
                 }
                 .pickerStyle(.segmented)
-            }
-
-            Section {
-                SecureField("Windy Point Forecast API key", text: $windyKey)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                Link("Get a key at api.windy.com", destination: URL(string: "https://api.windy.com/keys")!)
-            } header: {
-                Text("Windy (optional)")
-            } footer: {
-                Text("Windy's free testing keys return shuffled data; real values need a paid Point Forecast key.")
             }
 
             Section {
@@ -46,10 +33,6 @@ struct SettingsView: View {
                 if let model = store.feed?.predictions?.modelVersion {
                     LabeledContent("Model", value: model)
                 }
-                TextField("Feed URL", text: $feedURL)
-                    .font(.footnote)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
                 Button("Refresh everything") { Task { await store.refreshAll() } }
             } header: {
                 Text("Data")

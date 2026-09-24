@@ -22,7 +22,9 @@ struct WindView: View {
                     CrewWindCard(wind: wind, reach: store.reach, stream: store.feed?.richmond?.stream,
                                  usingLocation: store.location.isAuthorized, unit: unit)
                 }
-                WindyCard(forecast: store.windy, error: store.windyError, unit: unit)
+                if store.hasWindy {
+                    WindyCard(forecast: store.windy, error: store.windyError, unit: unit)
+                }
             }
             .padding()
             .frame(maxWidth: 720)
@@ -142,8 +144,7 @@ private struct WindyCard: View {
             if let error {
                 Text(error).font(.footnote).foregroundStyle(.orange)
             } else if forecast.isEmpty {
-                Text("Add a Windy Point Forecast API key in More to compare with Windy's model here.")
-                    .font(.footnote).foregroundStyle(.secondary)
+                ProgressView()
             } else {
                 let upcoming = forecast.filter { $0.time > Date().addingTimeInterval(-3 * 3600) }.prefix(8)
                 ScrollView(.horizontal, showsIndicators: false) {

@@ -10,6 +10,7 @@ struct FlagView: View {
                 if let feed = store.feed {
                     FeedStatusBanner(feed: feed, source: store.feedSource, error: store.feedError)
                     CurrentFlagCard(issue: feed.currentFlag, stream: feed.richmond?.stream)
+                    OfficialFlagCard()
                     if let predictions = feed.predictions {
                         PredictionsCard(predictions: predictions)
                     }
@@ -22,14 +23,20 @@ struct FlagView: View {
                     }
                     DisclaimerCard(text: feed.disclaimer, url: feed.officialFlagUrl)
                 } else {
-                    ProgressView("Loading the Tideway…").padding(.top, 80)
+                    OfficialFlagCard()
+                    GlassCard(tint: .orange) {
+                        Label("Predictions unavailable", systemImage: "exclamationmark.triangle.fill")
+                            .font(.headline)
+                        Text(store.feedError ?? "Loading…").font(.footnote).foregroundStyle(.secondary)
+                        Button("Try again") { Task { await store.refreshFeed() } }
+                            .buttonStyle(.glass)
+                    }
                 }
             }
             .padding()
             .frame(maxWidth: 720)          // readable column on iPad
             .frame(maxWidth: .infinity)
         }
-        .scrollContentBackground(.hidden)
         .screenBackground(store.feed?.currentFlag?.flag)
         .navigationTitle("Ebb Tide Flag")
         .refreshable { await store.refreshFeed() }
@@ -68,54 +75,71 @@ private struct CurrentFlagCard: View {
 
     var body: some View {
         let flag = issue?.flag
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Current flag")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(flag?.onColor.opacity(0.8) ?? .secondary)
+        VStack(spacing: 14) {
+            HStack {
+                Label("Latest from Richmond gauge", systemImage: "dot.radiowaves.left.and.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
                 Spacer()
                 if let stream {
                     Label(stream == "flood" ? "Flooding" : "Ebbing",
                           systemImage: stream == "flood" ? "arrow.up.right" : "arrow.down.left")
                         .font(.caption.weight(.semibold))
                         .padding(.horizontal, 10).padding(.vertical, 5)
-                        .glassEffect(.regular, in: .capsule)
+                        .glassEffect(.regular.interactive(), in: .capsule)
                 }
             }
-            HStack(alignment: .center, spacing: 16) {
-                Image(systemName: "flag.fill")
-                    .font(.system(size: 54, weight: .bold))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(flag?.title ?? "–")
-                        .font(.system(size: 44, weight: .heavy, design: .rounded))
-                    Text(flag?.summary ?? "No flag yet")
-                        .font(.headline)
-                }
-            }
-            .foregroundStyle(flag?.onColor ?? .primary)
 
-            if let issue {
-                HStack {
-                    Text("Low water \(issue.levelCd, format: .number.precision(.fractionLength(2))) m")
-                    Spacer()
-                    Text("Issued \(issue.issuedAt.formatted(date: .abbreviated, time: .shortened))")
+            ZStack(alignment: .bottom) {
+                FlagGauge(level: issue?.levelCd)
+                    .frame(height: 150)
+                VStack(spacing: 0) {
+                    Image(systemName: "flag.fill")
+                        .font(.system(size: 30, weight: .bold))
+                        .foregroundStyle(flag?.color ?? .secondary)
+                        .symbolEffect(.breathe)
+                    Text(flag?.title ?? "–")
+                        .font(.system(size: 46, weight: .heavy, design: .rounded))
+                        .contentTransition(.numericText())
                 }
-                .font(.footnote)
-                .foregroundStyle(flag?.onColor.opacity(0.85) ?? .secondary)
+                .padding(.bottom, 2)
             }
+
+            Text(flag?.summary ?? "No flag yet")
+                .font(.headline)
+            if let issue {
+                Text("Low water \(issue.levelCd, format: .number.precision(.fractionLength(2))) m · issued \(issue.issuedAt.formatted(.dateTime.weekday(.abbreviated).hour().minute()))")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
             HStack {
-                Image(systemName: "clock")
-                Text("Next update: \(FlagSchedule.label(FlagSchedule.nextIssue()))")
+                Label("Next update \(FlagSchedule.label(FlagSchedule.nextIssue()))", systemImage: "clock")
                 Spacer()
                 Text(FlagSchedule.nextIssue(), style: .relative)
                     .monospacedDigit()
             }
             .font(.footnote.weight(.medium))
-            .foregroundStyle(flag?.onColor.opacity(0.85) ?? .secondary)
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .glassEffect(.regular, in: .capsule)
         }
         .padding(20)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular.tint((flag?.color ?? .gray).opacity(0.85)), in: .rect(cornerRadius: 32))
+        .frame(maxWidth: .infinity)
+        .glassEffect(.regular.tint((flag?.color ?? .gray).opacity(0.22)), in: .rect(cornerRadius: 34))
+    }
+}
+
+/// The PLA's own widget: the authoritative current flag.
+private struct OfficialFlagCard: View {
+    var body: some View {
+        GlassCard {
+            CardHeader(title: "Official PLA flag", systemImage: "checkmark.seal.fill", trailing: "pla.co.uk")
+            PLAFlagWidget()
+                .aspectRatio(PLAFlagWidget.aspectRatio, contentMode: .fit)
+                .frame(maxWidth: 382)
+                .frame(maxWidth: .infinity)
+                .clipShape(.rect(cornerRadius: 18))
+        }
     }
 }
 

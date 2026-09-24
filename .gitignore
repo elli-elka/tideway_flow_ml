@@ -7,3 +7,5 @@ ios/**/*.xcodeproj/
 xcuserdata/
 DerivedData/
 .DS_Store
+ios/TidewayHub/Config/Secrets.xcconfig
+ios/TidewayHub/TidewayHub/Info.plist

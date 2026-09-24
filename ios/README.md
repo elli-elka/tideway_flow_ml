@@ -31,7 +31,15 @@ Re-run `xcodegen` whenever you add or remove Swift files.
 | Flag, predictions, Richmond, Kingston, tides | `feed.json` published by `pipeline/publish_app_feed.py` to GitHub Pages | No |
 | Weather | Open-Meteo, Met Office UKMO model (CC BY 4.0) | No |
 | Measured wind | Heathrow / London City METARs via aviationweather.gov | No |
-| Windy comparison (optional) | Windy Point Forecast API | Yes, in More |
+| Official current flag | PLA's embeddable Ebb Tide Flag widget | No |
+| Windy comparison (optional) | Windy Point Forecast API | Yes, built in (below) |
+
+### Optional Windy key
+
+Copy `Config/Secrets.example.xcconfig` to `Config/Secrets.xcconfig` (git-ignored), put
+your key in it, and re-run `xcodegen`. The key is compiled into the app, so users
+never see it; without a key the Windy card is hidden. Note that keys shipped inside
+an app can be extracted, and Windy's free testing keys return shuffled data.
 
 Until the feed is live (or when offline) the app shows the bundled
 `Resources/SampleFeed.json` (real Richmond data from July 2026) with a banner saying so.

@@ -2,9 +2,16 @@ import CoreLocation
 import Foundation
 
 /// Optional: Windy Point Forecast API (https://api.windy.com/point-forecast/docs).
-/// Needs your own API key (More > Windy API key). Note Windy's free/testing keys
-/// return deliberately shuffled data; a paid key is needed for real values.
+/// The key is built into the app from Config/Secrets.xcconfig (not committed); without
+/// one the Windy card is hidden. Windy's free testing keys return deliberately
+/// shuffled data, so real values need a paid key.
 struct WindyService: Sendable {
+    static var bundledKey: String? {
+        guard let key = Bundle.main.object(forInfoDictionaryKey: "WindyAPIKey") as? String else { return nil }
+        let trimmed = key.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty || trimmed.hasPrefix("$(") ? nil : trimmed
+    }
+
     let apiKey: String
     let model = "iconEu"   // high-resolution European model; "gfs" also works
 
