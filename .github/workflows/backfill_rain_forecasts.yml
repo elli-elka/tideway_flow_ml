@@ -1,0 +1,38 @@
+name: Backfill Past Rain Forecasts (one-off)
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "First day to backfill (YYYY-MM-DD)"
+        required: false
+        default: "2024-01-01"
+      end:
+        description: "Last day (YYYY-MM-DD, empty = yesterday)"
+        required: false
+        default: ""
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Backfill forecasts
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python backfill_rain_forecasts.py "${{ inputs.start }}" "${{ inputs.end }}"

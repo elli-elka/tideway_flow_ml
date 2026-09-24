@@ -19,7 +19,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for wf in daily_ingest.yml rainfall_ingest.yml pla_scrape_ingest.yml kingston_flow_ingest.yml catchment_rain_ingest.yml keepalive.yml; do
+          for wf in daily_ingest.yml rainfall_ingest.yml pla_scrape_ingest.yml kingston_flow_ingest.yml catchment_rain_ingest.yml hydrology_ingest.yml keepalive.yml; do
             echo "Enabling $wf"
             gh api -X PUT "repos/${{ github.repository }}/actions/workflows/$wf/enable"
           done

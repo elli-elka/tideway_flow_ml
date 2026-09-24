@@ -3,8 +3,9 @@ Daily rainfall across the Thames catchment upstream of Teddington, from Open-Met
 (free, no API key, non-commercial use).
 
 Two tables:
-  catchment_rain_daily     observed/reanalysis rainfall and reference evapotranspiration
-                           (et0, how much water evaporates) per point per day (ERA5-based,
+  catchment_rain_daily     observed/reanalysis rainfall, reference evapotranspiration
+                           (et0, how much water evaporates) and soil moisture (7-28cm
+                           and 28-100cm) per point per day (ERA5-based,
                            back to 1940; lags real time by ~5 days)
   catchment_rain_forecast  a snapshot of the 16-day forecast, saved every day it runs.
                            Keeping every snapshot lets you train/evaluate the model on
@@ -46,12 +47,29 @@ HISTORY_TABLE = "catchment_rain_daily"
 FORECAST_TABLE = "catchment_rain_forecast"
 HISTORY_START = date.fromisoformat(os.getenv("RAIN_HISTORY_START", "2005-01-01"))
 FORECAST_MODEL = os.getenv("RAIN_FORECAST_MODEL", "best_match")  # e.g. ukmo_seamless, ecmwf_ifs025
-ARCHIVE_LAG_DAYS = 6  # reanalysis is published ~5 days behind
+ARCHIVE_LAG_DAYS = 6
+# ERA5 soil layers (volumetric m3/m3): how wet the ground is decides whether rain runs off
+SOIL_LAYERS = ("soil_moisture_7_to_28cm", "soil_moisture_28_to_100cm")  # reanalysis is published ~5 days behind
 
 
 # --------------------------------------------------
 # UTILS
 # --------------------------------------------------
+
+def daily_soil_moisture(hourly):
+    """Daily mean of the hourly soil moisture layers -> {day: (shallow, deep)} in m3/m3."""
+    sums = {}
+    for i, ts in enumerate(hourly.get("time", [])):
+        day = ts[:10]
+        for j, layer in enumerate(SOIL_LAYERS):
+            value = (hourly.get(layer) or [None] * (i + 1))[i]
+            if value is not None:
+                total, count = sums.setdefault((day, j), [0.0, 0])
+                sums[(day, j)] = [total + value, count + 1]
+    days = {d for d, _ in sums}
+    return {d: tuple((sums[(d, j)][0] / sums[(d, j)][1]) if (d, j) in sums else None
+                     for j in range(len(SOIL_LAYERS))) for d in days}
+
 
 def location_params():
     names = list(POINTS)
@@ -94,19 +112,24 @@ def ingest_history(cur, session):
             "start_date": chunk_start.isoformat(),
             "end_date": chunk_end.isoformat(),
             "daily": "precipitation_sum,et0_fao_evapotranspiration",
+            "hourly": ",".join(SOIL_LAYERS),
         })
         rows = []
         for name, result in zip(names, results):
             daily = result["daily"]
             et0s = daily.get("et0_fao_evapotranspiration") or [None] * len(daily["time"])
+            soil = daily_soil_moisture(result.get("hourly") or {})
             for day, precip, et0 in zip(daily["time"], daily["precipitation_sum"], et0s):
                 if precip is not None:
-                    rows.append((day, name, precip, et0))
+                    shallow, deep = soil.get(day, (None, None))
+                    rows.append((day, name, precip, et0, shallow, deep))
         cur.executemany(f"""
-            INSERT INTO {HISTORY_TABLE} (day, point, precip_mm, et0_mm)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO {HISTORY_TABLE} (day, point, precip_mm, et0_mm, soil_moisture_shallow, soil_moisture_deep)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (day, point) DO UPDATE
-            SET precip_mm = EXCLUDED.precip_mm, et0_mm = EXCLUDED.et0_mm;
+            SET precip_mm = EXCLUDED.precip_mm, et0_mm = EXCLUDED.et0_mm,
+                soil_moisture_shallow = EXCLUDED.soil_moisture_shallow,
+                soil_moisture_deep = EXCLUDED.soil_moisture_deep;
         """, rows)
         cur.connection.commit()  # keep progress if a later chunk fails
         total += len(rows)
@@ -146,34 +169,42 @@ def ingest_forecast(cur, session):
     print(f"Saved {len(rows)} forecast rows (issued {issued}, model {FORECAST_MODEL}).")
 
 
+def create_tables(cur):
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS {HISTORY_TABLE} (
+            day DATE NOT NULL,
+            point TEXT NOT NULL,
+            precip_mm DOUBLE PRECISION NOT NULL,
+            et0_mm DOUBLE PRECISION,
+            soil_moisture_shallow DOUBLE PRECISION,
+            soil_moisture_deep DOUBLE PRECISION,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            PRIMARY KEY (day, point)
+        );
+        ALTER TABLE {HISTORY_TABLE} ADD COLUMN IF NOT EXISTS soil_moisture_shallow DOUBLE PRECISION;
+        ALTER TABLE {HISTORY_TABLE} ADD COLUMN IF NOT EXISTS soil_moisture_deep DOUBLE PRECISION;
+        CREATE TABLE IF NOT EXISTS {FORECAST_TABLE} (
+            issued_date DATE NOT NULL,
+            target_day DATE NOT NULL,
+            point TEXT NOT NULL,
+            model TEXT NOT NULL,
+            lead_days INTEGER NOT NULL,
+            precip_mm DOUBLE PRECISION NOT NULL,
+            precip_prob DOUBLE PRECISION,
+            et0_mm DOUBLE PRECISION,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            PRIMARY KEY (issued_date, target_day, point, model)
+        );
+    """)
+
+
 def main():
     database_url = get_database_url()
     session = http_session()
 
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
-            cur.execute(f"""
-                CREATE TABLE IF NOT EXISTS {HISTORY_TABLE} (
-                    day DATE NOT NULL,
-                    point TEXT NOT NULL,
-                    precip_mm DOUBLE PRECISION NOT NULL,
-                    et0_mm DOUBLE PRECISION,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    PRIMARY KEY (day, point)
-                );
-                CREATE TABLE IF NOT EXISTS {FORECAST_TABLE} (
-                    issued_date DATE NOT NULL,
-                    target_day DATE NOT NULL,
-                    point TEXT NOT NULL,
-                    model TEXT NOT NULL,
-                    lead_days INTEGER NOT NULL,
-                    precip_mm DOUBLE PRECISION NOT NULL,
-                    precip_prob DOUBLE PRECISION,
-                    et0_mm DOUBLE PRECISION,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    PRIMARY KEY (issued_date, target_day, point, model)
-                );
-            """)
+            create_tables(cur)
             conn.commit()
             ingest_forecast(cur, session)
             conn.commit()
