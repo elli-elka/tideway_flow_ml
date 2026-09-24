@@ -10,6 +10,14 @@ final class AppStore {
     var feedSource: FeedService.Source = .sample
     var feedError: String?
 
+    // Live Richmond tide (PLA, else EA), refreshed every few minutes
+    var liveTide: LiveTide?
+
+    /// Live tide if available, else the pipeline feed's Richmond series.
+    var tide: LiveTide? {
+        liveTide ?? feed?.richmond.map { LiveTide(feed: $0) }
+    }
+
     // Weather and wind
     var weather: WeatherForecast?
     var weatherError: String?
@@ -57,6 +65,7 @@ final class AppStore {
         location.request()
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.refreshFeed() }
+            group.addTask { await self.refreshLiveTide() }
             group.addTask { await self.refreshWeather() }
             group.addTask { await self.refreshObservations() }
             group.addTask { await self.refreshCourseWind() }
@@ -71,6 +80,32 @@ final class AppStore {
         feed = offline.feed
         feedSource = offline.source
         feedError = offline.error
+    }
+
+    /// Keeps live data fresh while the app is open: tide every 5 minutes, weather and
+    /// wind every 15, the feed every 30. Ends automatically when the view goes away.
+    func autoRefresh() async {
+        var tick = 0
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(300))
+            if Task.isCancelled { break }
+            tick += 1
+            await refreshLiveTide()
+            if tick % 3 == 0 {
+                await refreshWeather()
+                await refreshObservations()
+                await refreshCourseWind()
+            }
+            if tick % 6 == 0 { await refreshFeed() }
+        }
+    }
+
+    func refreshLiveTide() async {
+        // Chart datum offset for the EA gauge, calibrated by the pipeline
+        let offset = feed?.richmondCdOffset ?? 0.705
+        if let fresh = await LiveTideService().load(eaOffset: offset) {
+            liveTide = fresh
+        }
     }
 
     func refreshFeed() async {
@@ -141,4 +176,5 @@ final class AppStore {
 enum SettingsKey {
     static let feedURL = "feedURL"
     static let windUnit = "windUnit"
+    static let showDiagnostics = "showDiagnostics"
 }
