@@ -13,7 +13,7 @@ final class AppStore {
     // Weather and wind
     var weather: WeatherForecast?
     var weatherError: String?
-    var observations: [Observation] = []
+    var observations: [WindObservation] = []
     var courseWind: [Tideway.Waypoint: WindNow] = [:]
     var windy: [WindNow] = []
     var windyError: String?

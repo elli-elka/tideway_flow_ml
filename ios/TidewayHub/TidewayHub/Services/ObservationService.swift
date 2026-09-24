@@ -6,7 +6,7 @@ import Foundation
 struct ObservationService: Sendable {
     static let stations = ["EGLL": "Heathrow", "EGLC": "London City"]
 
-    func latest() async throws -> [Observation] {
+    func latest() async throws -> [WindObservation] {
         let ids = Self.stations.keys.sorted().joined(separator: ",")
         let url = URL(string: "https://aviationweather.gov/api/data/metar?ids=\(ids)&format=json")!
         let (data, _) = try await URLSession.shared.data(from: url)
@@ -18,7 +18,7 @@ struct ObservationService: Sendable {
         }
         return latest.values
             .map { m in
-                Observation(station: Self.stations[m.icaoId] ?? m.icaoId,
+                WindObservation(station: Self.stations[m.icaoId] ?? m.icaoId,
                             time: Date(timeIntervalSince1970: TimeInterval(m.obsTime)),
                             speedKn: m.wspd ?? 0, gustKn: m.wgst,
                             fromDegrees: m.wdir, temperature: m.temp)
@@ -27,7 +27,7 @@ struct ObservationService: Sendable {
     }
 }
 
-struct Observation: Sendable, Identifiable {
+struct WindObservation: Sendable, Identifiable {
     let station: String
     let time: Date
     let speedKn: Double

@@ -76,7 +76,7 @@ private struct CurrentConditionsCard: View {
 }
 
 private struct ObservationsCard: View {
-    let observations: [Observation]
+    let observations: [WindObservation]
     let unit: WindUnit
 
     var body: some View {
