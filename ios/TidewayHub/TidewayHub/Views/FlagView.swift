@@ -136,7 +136,7 @@ private struct OfficialFlagCard: View {
             CardHeader(title: "Official PLA flag", systemImage: "checkmark.seal.fill", trailing: "pla.co.uk")
             PLAFlagWidget()
                 .aspectRatio(PLAFlagWidget.aspectRatio, contentMode: .fit)
-                .frame(maxWidth: 382)
+                .frame(maxWidth: PLAFlagWidget.visibleSize.width)
                 .frame(maxWidth: .infinity)
                 .clipShape(.rect(cornerRadius: 18))
         }
