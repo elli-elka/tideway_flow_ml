@@ -24,7 +24,7 @@ struct SettingsView: View {
             } header: {
                 Text("Ebb Tide Flag")
             } footer: {
-                Text("Set at 6am and 6pm from the lowest Richmond tide reading of the previous 12 hours.")
+                Text("Set at 06:00 and 18:00 from the lowest Richmond tide reading of the previous 12 hours.")
             }
 
             Section {
@@ -38,6 +38,34 @@ struct SettingsView: View {
                 Text("Data")
             } footer: {
                 Text("Flags, predictions and levels: Tideway Flow ML pipeline (EA and PLA data, OGL). Weather: Open-Meteo (CC BY 4.0), Met Office UKMO model. Measured wind: aviationweather.gov. Unofficial app; always check the official flag.")
+            }
+
+            Section {
+                ForEach(Diagnostics.shared.sorted) { entry in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Circle().fill(entry.ok ? .green : .orange).frame(width: 8, height: 8)
+                            Text(entry.source).font(.subheadline.weight(.semibold))
+                            Spacer()
+                            Text(UKTime.hm(entry.time)).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Text(entry.summary).font(.caption)
+                        if let detail = entry.detail {
+                            Text(detail)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(4)
+                        }
+                    }
+                    .textSelection(.enabled)
+                }
+                if Diagnostics.shared.entries.isEmpty {
+                    Text("Nothing loaded yet. Pull to refresh on any tab.").font(.caption)
+                }
+            } header: {
+                Text("Diagnostics")
+            } footer: {
+                Text("What each data source last returned. Screenshot this if something looks wrong.")
             }
         }
         .scrollContentBackground(.hidden)

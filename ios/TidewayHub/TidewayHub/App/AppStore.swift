@@ -80,7 +80,14 @@ final class AppStore {
             feed = fresh
             feedSource = .live
             feedError = nil
+            Diagnostics.shared.record(
+                "Feed (GitHub Pages)", ok: true,
+                summary: "Live, generated \(fresh.generatedAt.ago); flag \(fresh.currentFlag?.flag.title ?? "none"), "
+                    + "\(fresh.predictions?.issues.count ?? 0) predictions, \(fresh.rainForecast?.count ?? 0) rain days, "
+                    + "Kingston \(fresh.kingstonFlow == nil ? "missing" : "ok")")
         } else {
+            Diagnostics.shared.record("Feed (GitHub Pages)", ok: false, summary: live.error ?? "Unknown error",
+                                      detail: url.absoluteString)
             feedError = live.error
             if feed == nil {
                 let offline = FeedService().loadOffline()
@@ -108,7 +115,9 @@ final class AppStore {
         let stations = Tideway.stations
         guard let winds = try? await WeatherService().currentWind(at: stations.map(\.coordinate)),
               winds.count == stations.count else { return }
-        courseWind = Dictionary(uniqueKeysWithValues: zip(stations, winds))
+        courseWind = Dictionary(uniqueKeysWithValues: zip(stations, winds).compactMap { station, wind in
+            wind.map { (station, $0) }
+        })
     }
 
     /// True when a Windy key was built into the app (see ios/README.md).

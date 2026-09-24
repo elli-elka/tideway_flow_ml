@@ -54,7 +54,7 @@ private struct CurrentConditionsCard: View {
         GlassCard {
             VStack(alignment: .leading, spacing: 12) {
                 CardHeader(title: placeName, systemImage: "location.fill",
-                           trailing: current.time.formatted(date: .omitted, time: .shortened))
+                           trailing: UKTime.hm(current.time))
                 HStack(alignment: .center, spacing: 16) {
                     Image(systemName: symbol.symbol)
                         .symbolRenderingMode(.multicolor)
@@ -66,9 +66,13 @@ private struct CurrentConditionsCard: View {
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
-                HStack(spacing: 10) {
-                    WindArrow(fromDegrees: current.wind.fromDegrees)
-                    Text(windText(current.wind, unit: unit)).font(.headline)
+                if let wind = current.wind {
+                    HStack(spacing: 10) {
+                        WindArrow(fromDegrees: wind.fromDegrees)
+                        Text(windText(wind, unit: unit)).font(.headline)
+                    }
+                } else {
+                    Text("Wind: no data").font(.headline).foregroundStyle(.secondary)
                 }
             }
         }
@@ -119,7 +123,7 @@ private struct HourlyCard: View {
                     HStack(spacing: 14) {
                         ForEach(hours) { hour in
                             VStack(spacing: 6) {
-                                Text(hour.time.formatted(.dateTime.hour()))
+                                Text(UKTime.hm(hour.time))
                                     .font(.caption).foregroundStyle(.secondary)
                                 Image(systemName: WeatherSymbol.of(hour.code).symbol)
                                     .symbolRenderingMode(.multicolor)
@@ -168,11 +172,11 @@ private struct DaylightCard: View {
         GlassCard {
             HStack {
                 if let sunrise = day.sunrise {
-                    Label(sunrise.formatted(date: .omitted, time: .shortened), systemImage: "sunrise.fill")
+                    Label(UKTime.hm(sunrise), systemImage: "sunrise.fill")
                 }
                 Spacer()
                 if let sunset = day.sunset {
-                    Label(sunset.formatted(date: .omitted, time: .shortened), systemImage: "sunset.fill")
+                    Label(UKTime.hm(sunset), systemImage: "sunset.fill")
                 }
             }
             .font(.headline)
@@ -197,7 +201,7 @@ private struct DailyCard: View {
                 CardHeader(title: "7 days", systemImage: "calendar")
                 ForEach(days) { day in
                     HStack(spacing: 12) {
-                        Text(Calendar.current.isDateInToday(day.date) ? "Today" : day.date.formatted(.dateTime.weekday(.abbreviated)))
+                        Text(Calendar.current.isDateInToday(day.date) ? "Today" : UKTime.weekday(day.date))
                             .frame(width: 52, alignment: .leading)
                         Image(systemName: WeatherSymbol.of(day.code).symbol)
                             .symbolRenderingMode(.multicolor)
