@@ -12,7 +12,7 @@ struct FlagView: View {
                     CurrentFlagCard(issue: feed.currentFlag, stream: feed.richmond?.stream)
                     OfficialFlagCard()
                     if let predictions = feed.predictions {
-                        PredictionsCard(predictions: predictions)
+                        PredictionsCard(predictions: predictions, rain: feed.rainForecast ?? [])
                     }
                     if let richmond = feed.richmond {
                         RichmondCard(richmond: richmond)
@@ -145,6 +145,7 @@ private struct OfficialFlagCard: View {
 
 private struct PredictionsCard: View {
     let predictions: Predictions
+    let rain: [RainDay]
     @State private var selected: PredictedIssue?
 
     var body: some View {
@@ -166,7 +167,46 @@ private struct PredictionsCard: View {
                 if let issue = selected ?? predictions.issues.first {
                     PredictionDetail(issue: issue)
                 }
+                if !rain.isEmpty {
+                    Divider().opacity(0.4)
+                    CatchmentRainStrip(days: rain)
+                }
             }
+        }
+    }
+}
+
+/// Forecast rain over the Thames catchment for each coming day: the rain the
+/// predictions are reacting to (it takes 1-5 days to reach Teddington).
+private struct CatchmentRainStrip: View {
+    let days: [RainDay]
+
+    var body: some View {
+        let peak = max(days.map(\.catchmentMm).max() ?? 0, 5)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Rain upstream", systemImage: "cloud.rain.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(days.reduce(0) { $0 + $1.catchmentMm }, format: .number.precision(.fractionLength(0))) mm this week")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            HStack(alignment: .bottom, spacing: 6) {
+                ForEach(days) { day in
+                    VStack(spacing: 4) {
+                        Text(day.catchmentMm >= 0.5 ? "\(day.catchmentMm, format: .number.precision(.fractionLength(0)))" : "")
+                            .font(.caption2.weight(.semibold))
+                        Capsule()
+                            .fill(.blue.gradient)
+                            .frame(height: max(4, 44 * day.catchmentMm / peak))
+                        Text(day.date?.formatted(.dateTime.weekday(.narrow)) ?? "")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .frame(height: 76, alignment: .bottom)
         }
     }
 }

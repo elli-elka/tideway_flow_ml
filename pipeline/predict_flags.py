@@ -10,7 +10,9 @@ Inputs (each used only if its table exists and has data; missing values are fine
   richmond_ebb_flags        recent low-water levels (built by build_ebb_flags.py)
   richmond_pla_levels       PLA astronomical tide prediction for future windows
   catchment_rain_daily      observed rain, evapotranspiration, soil moisture
-  catchment_rain_forecast   rain forecast for the days ahead (as issued at the time)
+  catchment_rain_forecast   rain forecast for the days ahead (as issued at the time):
+                            total to the target flag, and the 5 days before it (the
+                            rain that has time to reach Teddington)
   kingston_flow_readings,   river flow at Kingston and upstream gauges
   kingston_daily_flow_nrfa,
   river_flow_daily
@@ -168,23 +170,45 @@ def daily_features(daily, day):
     return f
 
 
-def rain_ahead(data, issue_day, target_day):
-    """Forecast rain (catchment mean) from the issue day up to the target day, as the
-    forecast stood on the issue day. Falls back to observed rain (a perfect forecast,
-    so optimistic) for training rows with no archived forecast."""
+def rain_window(data, issue_day, start, end):
+    """Catchment-mean rain from `start` to `end` (inclusive) as it was known on
+    `issue_day`: observed rain for days before the issue day, and the rain forecast
+    issued on (or just before) the issue day for the days after. Where no archived
+    forecast exists (older training rows) observed rain stands in, which is a perfect
+    forecast and so optimistic. Returns (mm, share of forecast days that were real
+    forecasts)."""
+    if end < start:
+        return 0.0, np.nan
+    days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+    daily = data["daily"]
+    observed = daily["rain"] if len(daily) and "rain" in daily else pd.Series(dtype=float)
+
+    forecast = {}
     fc = data["forecast"]
     if len(fc):
-        issued = fc[(fc.issued_date <= issue_day) & (fc.target_day >= issue_day) & (fc.target_day <= target_day)]
+        issued = fc[(fc.issued_date <= issue_day) & (fc.target_day >= issue_day) & (fc.target_day <= end)]
         if len(issued):
             latest = issued[issued.issued_date == issued.issued_date.max()]
-            if latest.target_day.nunique() >= (target_day - issue_day).days + 1:
-                return latest.rain.sum(), 1.0
-    daily = data["daily"]
-    if len(daily) and "rain" in daily:
-        obs = daily.loc[(daily.index >= issue_day) & (daily.index <= target_day), "rain"]
-        if len(obs) == (target_day - issue_day).days + 1 and obs.notna().all():
-            return obs.sum(), 0.0
-    return np.nan, np.nan
+            forecast = dict(zip(latest.target_day, latest.rain))
+
+    total, future_days, real_forecasts = 0.0, 0, 0
+    for day in days:
+        if day >= issue_day:
+            future_days += 1
+            if day in forecast:
+                total += forecast[day]
+                real_forecasts += 1
+                continue
+        value = observed.get(day, np.nan)
+        if pd.isna(value):
+            return np.nan, np.nan
+        total += value
+    return total, (real_forecasts / future_days if future_days else np.nan)
+
+
+def rain_ahead(data, issue_day, target_day):
+    """Forecast rain from the issue day up to the target day."""
+    return rain_window(data, issue_day, issue_day, target_day)
 
 
 def predicted_tide_low(pla, end):
@@ -216,6 +240,10 @@ def base_features(flags, i, data):
 def target_features(t, target, h, data):
     sn_sin, sn_cos = spring_neap(target)
     rain, rain_is_forecast = rain_ahead(data, local_day(t), local_day(target))
+    # Rain takes roughly 1-5 days to reach Teddington, so the rain that matters most
+    # for a flag is what falls in the days just before it
+    lagged, _ = rain_window(data, local_day(t), local_day(target) - timedelta(days=5),
+                            local_day(target) - timedelta(days=1))
     return {
         "horizon": h,
         "sn_sin": sn_sin,
@@ -223,6 +251,7 @@ def target_features(t, target, h, data):
         "target_is_morning": 1.0 if target.astimezone(UK).hour < 12 else 0.0,
         "tide_pred_low": predicted_tide_low(data["pla"], target),
         "rain_ahead": rain,
+        "rain_5d_before_target": lagged,
         "rain_ahead_is_forecast": rain_is_forecast,
     }
 

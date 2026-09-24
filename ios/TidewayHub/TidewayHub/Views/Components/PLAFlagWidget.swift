@@ -16,7 +16,7 @@ struct PLAFlagWidget: UIViewRepresentable {
     /// Dead space to trim off the PLA page's own edges. Nudge a few points at a time
     /// until it looks centred, e.g. EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8).
     /// (Safari's Web Inspector on the widget URL shows where its content sits.)
-    static let crop = EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)
+    static let crop = EdgeInsets(top: 0, leading: 0, bottom: 1, trailing: 0)
 
     static var visibleSize: CGSize {
         CGSize(width: designSize.width - crop.leading - crop.trailing,

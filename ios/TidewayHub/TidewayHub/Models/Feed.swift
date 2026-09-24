@@ -12,6 +12,8 @@ struct Feed: Codable, Sendable {
     let richmond: Richmond?
     let kingstonFlow: KingstonFlow?
     let tides: [TideEvent]?
+    /// Catchment-average rain forecast for the coming week (feeds the predictions).
+    let rainForecast: [RainDay]?
 
     static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
@@ -85,4 +87,20 @@ struct TideEvent: Codable, Sendable, Identifiable {
     let predictedCd: Double
     var id: Date { t }
     var isHigh: Bool { type == "high" }
+}
+
+struct RainDay: Codable, Sendable, Identifiable {
+    /// Calendar day, "yyyy-MM-dd".
+    let day: String
+    let catchmentMm: Double
+    let chance: Double?
+    var id: String { day }
+
+    var date: Date? {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(identifier: "Europe/London")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: day)
+    }
 }

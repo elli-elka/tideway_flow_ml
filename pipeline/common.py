@@ -112,22 +112,33 @@ def fetch_ea_api(session, measure_id, since):
         offset += EA_PAGE_LIMIT
 
 
-def fetch_ea_archive_day(session, day, measure_id):
-    """Fetch one day of readings for a measure from the EA daily archive CSV."""
+def fetch_ea_archive_day_multi(session, day, measure_ids):
+    """One day of the EA daily archive CSV (every reading from every gauge), keeping
+    only the given measures -> {measure_id: [(ts, value)]}. Returns None if the
+    archive has no file for that day."""
     url = f"{EA_API_BASE}/archive/readings-{day.isoformat()}.csv"
-    suffix = f"/{measure_id}"
-    readings = []
+    wanted = {f"/{m}": m for m in measure_ids}
+    readings = {m: [] for m in measure_ids}
     with session.get(url, stream=True, timeout=TIMEOUT) as response:
         if response.status_code == 404:
-            print(f"  WARNING: no archive file for {day}")
-            return readings
+            return None
         response.raise_for_status()
         response.encoding = "utf-8"
-        lines = response.iter_lines(decode_unicode=True)
-        for row in csv.DictReader(lines):
-            if row.get("measure", "").endswith(suffix):
-                readings.append((parse_ts(row["dateTime"]), parse_value(row.get("value"))))
+        for row in csv.DictReader(response.iter_lines(decode_unicode=True)):
+            measure = row.get("measure", "")
+            key = measure[measure.rfind("/"):]
+            if key in wanted:
+                readings[wanted[key]].append((parse_ts(row["dateTime"]), parse_value(row.get("value"))))
     return readings
+
+
+def fetch_ea_archive_day(session, day, measure_id):
+    """Fetch one day of readings for a measure from the EA daily archive CSV."""
+    readings = fetch_ea_archive_day_multi(session, day, [measure_id])
+    if readings is None:
+        print(f"  WARNING: no archive file for {day}")
+        return []
+    return readings[measure_id]
 
 
 def fetch_ea_readings(session, measure_id, since):
@@ -158,6 +169,18 @@ def fetch_ea_readings(session, measure_id, since):
     return readings
 
 
+def ensure_readings_table(cur, table_name, value_column):
+    """The standard layout for a 15-minute EA readings table."""
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            ts TIMESTAMPTZ PRIMARY KEY,
+            {value_column} DOUBLE PRECISION NOT NULL,
+            station_id TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
+
+
 def run_ea_ingest(table_name, value_column, measure_id, station_id, default_days=5):
     """Create the table if needed, fetch everything newer than the latest stored
     reading (gap-filling from the archive), and insert it."""
@@ -165,14 +188,7 @@ def run_ea_ingest(table_name, value_column, measure_id, station_id, default_days
 
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
-            cur.execute(f"""
-                CREATE TABLE IF NOT EXISTS {table_name} (
-                    ts TIMESTAMPTZ PRIMARY KEY,
-                    {value_column} DOUBLE PRECISION NOT NULL,
-                    station_id TEXT NOT NULL,
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                );
-            """)
+            ensure_readings_table(cur, table_name, value_column)
             cur.execute(f"SELECT MAX(ts) FROM {table_name};")
             last_ts = cur.fetchone()[0]
 

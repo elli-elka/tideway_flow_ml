@@ -26,9 +26,23 @@ final class AppStore {
         UserDefaults.standard.string(forKey: SettingsKey.feedURL) ?? FeedService.defaultURL.absoluteString
     }
 
-    /// Your position if shared, otherwise Putney.
+    /// Your position if shared and near the Tideway, otherwise Putney. (The Simulator
+    /// defaults to California, which gave Californian weather with London times.)
     var coordinate: CLLocationCoordinate2D {
-        location.location?.coordinate ?? Tideway.defaultCoordinate
+        guard let here = location.location, isNearTideway(here) else { return Tideway.defaultCoordinate }
+        return here.coordinate
+    }
+
+    /// True when we're using the device's real position rather than Putney.
+    var usingDeviceLocation: Bool {
+        guard let here = location.location else { return false }
+        return isNearTideway(here)
+    }
+
+    private func isNearTideway(_ location: CLLocation) -> Bool {
+        let putney = CLLocation(latitude: Tideway.defaultCoordinate.latitude,
+                                longitude: Tideway.defaultCoordinate.longitude)
+        return location.distance(from: putney) < 40_000
     }
 
     var reach: Tideway.Reach { Tideway.nearestReach(to: coordinate) }

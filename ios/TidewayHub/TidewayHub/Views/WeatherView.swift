@@ -15,7 +15,7 @@ struct WeatherView: View {
                 if let weather = store.weather {
                     if let current = weather.current {
                         CurrentConditionsCard(current: current, unit: unit,
-                                              placeName: store.location.isAuthorized ? "Your location" : "Putney")
+                                              placeName: store.usingDeviceLocation ? "Your location" : "Putney")
                     }
                     if !store.observations.isEmpty {
                         ObservationsCard(observations: store.observations, unit: unit)
