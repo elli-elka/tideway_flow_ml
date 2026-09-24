@@ -38,7 +38,7 @@ struct WeatherService: Sendable {
             throw URLError(.badServerResponse)
         }
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.keyDecodingStrategy = .snakeCaseKeepingDigits
         return WeatherForecast(try decoder.decode(OpenMeteoResponse.self, from: data))
     }
 
@@ -55,7 +55,7 @@ struct WeatherService: Sendable {
         ]
         let (data, _) = try await URLSession.shared.data(from: components.url!)
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.keyDecodingStrategy = .snakeCaseKeepingDigits
         // One location returns an object, several return an array
         let responses: [OpenMeteoResponse]
         if let many = try? decoder.decode([OpenMeteoResponse].self, from: data) {
