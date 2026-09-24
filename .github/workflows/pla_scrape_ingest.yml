@@ -1,29 +1,35 @@
-name: Daily Richmond Tidal Ingest
+name: PLA Richmond Tides Ingest
 
 on:
   schedule:
-    - cron: "0 */6 * * *"   # Runs every 6 hours (00:00, 06:00, 12:00, 18:00)
-  workflow_dispatch:        # This lets you click "Run workflow" manually to test
+    - cron: "7 */6 * * *"   # off the top of the hour, when GitHub drops/delays fewer scheduled runs
+  workflow_dispatch:        # "Run workflow" button
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 jobs:
   ingest:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
       - name: Install dependencies
         run: |
-          pip install requests psycopg[binary] python-dotenv
+          pip install -r requirements.txt
 
       - name: Run ingestion script
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PYTHONUNBUFFERED: "1"
         run: |
           python etl_pla.py

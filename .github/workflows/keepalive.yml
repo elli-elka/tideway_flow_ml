@@ -1,0 +1,25 @@
+name: Keep Scheduled Workflows Alive
+
+# GitHub disables scheduled workflows after 60 days without repository activity
+# (this happened to all ingest workflows on 27-28 July 2026). Re-enabling them via
+# the API every month keeps them running without needing dummy commits.
+on:
+  schedule:
+    - cron: "37 3 1 * *"   # 03:37 UTC on the 1st of each month
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-enable workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for wf in daily_ingest.yml rainfall_ingest.yml pla_scrape_ingest.yml keepalive.yml; do
+            echo "Enabling $wf"
+            gh api -X PUT "repos/${{ github.repository }}/actions/workflows/$wf/enable"
+          done
