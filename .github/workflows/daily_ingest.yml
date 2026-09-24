@@ -1,4 +1,4 @@
-name: EA Richmond Tidal Levels Ingest
+name: Richmond Levels, Flags, Predictions & App Feed
 
 on:
   schedule:
@@ -13,6 +13,10 @@ on:
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: pipeline
 
 jobs:
   ingest:
@@ -53,3 +57,31 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: |
           python predict_flags.py
+
+      - name: Build app feed
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python publish_app_feed.py site
+
+      - name: Upload app feed
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: pipeline/site
+
+  # Publishes feed.json to https://<user>.github.io/<repo>/feed.json for the iOS app.
+  # Needs Settings -> Pages -> Source: "GitHub Actions".
+  deploy-feed:
+    needs: ingest
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
