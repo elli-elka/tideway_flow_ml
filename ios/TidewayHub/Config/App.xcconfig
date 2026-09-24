@@ -1,0 +1,9 @@
+// Build settings shared by all configurations.
+//
+// Optional API keys live in Secrets.xcconfig next to this file, which is NOT
+// committed. To add one: copy Secrets.example.xcconfig to Secrets.xcconfig and
+// fill it in, then re-run xcodegen. Without it the app builds fine and simply
+// hides features that need a key.
+WINDY_API_KEY =
+
+#include? "Secrets.xcconfig"

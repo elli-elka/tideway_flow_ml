@@ -1,2 +1,11 @@
 .env
 __pycache__/
+pipeline/site/
+
+# Xcode (the project is generated from ios/TidewayHub/project.yml by XcodeGen)
+ios/**/*.xcodeproj/
+xcuserdata/
+DerivedData/
+.DS_Store
+ios/TidewayHub/Config/Secrets.xcconfig
+ios/TidewayHub/TidewayHub/Info.plist
