@@ -108,7 +108,7 @@ private struct CurrentFlagCard: View {
             Text(flag?.summary ?? "No flag yet")
                 .font(.headline)
             if let issue {
-                Text("Low water \(issue.levelCd, format: .number.precision(.fractionLength(2))) m · issued \(issue.issuedAt.formatted(.dateTime.weekday(.abbreviated).hour().minute()))")
+                Text("Low water \(issue.levelCd, format: .number.precision(.fractionLength(2))) m · issued \(UKTime.dayHM(issue.issuedAt))")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -283,7 +283,7 @@ private struct RichmondCard: View {
         GlassCard {
             VStack(alignment: .leading, spacing: 10) {
                 CardHeader(title: "Richmond level", systemImage: "water.waves",
-                           trailing: "\(richmond.latestAt.formatted(date: .omitted, time: .shortened))")
+                           trailing: UKTime.hm(richmond.latestAt))
                 Text("\(richmond.levelCd, format: .number.precision(.fractionLength(2))) m above chart datum")
                     .font(.title3.weight(.semibold))
                 Chart {
@@ -307,7 +307,7 @@ private struct RichmondCard: View {
                 }
                 .chartYAxisLabel("m CD")
                 .frame(height: 190)
-                Text("The flag uses the lowest reading in the 12 hours before 6am/6pm.")
+                Text("The flag uses the lowest reading in the 12 hours before 06:00 and 18:00.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -365,7 +365,7 @@ private struct TidesCard: View {
                     HStack {
                         Image(systemName: tide.isHigh ? "arrow.up.to.line" : "arrow.down.to.line")
                             .foregroundStyle(tide.isHigh ? .cyan : .secondary)
-                        Text(tide.t.formatted(.dateTime.weekday(.abbreviated).hour().minute()))
+                        Text(UKTime.dayHM(tide.t))
                         Spacer()
                         Text("\(tide.predictedCd, format: .number.precision(.fractionLength(1))) m")
                             .foregroundStyle(.secondary)

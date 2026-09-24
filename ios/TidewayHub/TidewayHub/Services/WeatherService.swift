@@ -22,8 +22,8 @@ struct WeatherService: Sendable {
     private func fetch(at coordinate: CLLocationCoordinate2D, model: String?) async throws -> WeatherForecast {
         var components = URLComponents(string: "https://api.open-meteo.com/v1/forecast")!
         components.queryItems = [
-            .init(name: "latitude", value: String(coordinate.latitude)),
-            .init(name: "longitude", value: String(coordinate.longitude)),
+            .init(name: "latitude", value: String(format: "%.4f", coordinate.latitude)),
+            .init(name: "longitude", value: String(format: "%.4f", coordinate.longitude)),
             .init(name: "current", value: "temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m"),
             .init(name: "hourly", value: "temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m"),
             .init(name: "daily", value: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max,sunrise,sunset"),
@@ -33,42 +33,76 @@ struct WeatherService: Sendable {
             .init(name: "forecast_days", value: "7"),
         ]
         if let model { components.queryItems?.append(.init(name: "models", value: model)) }
-        let (data, response) = try await URLSession.shared.data(from: components.url!)
-        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-            throw URLError(.badServerResponse)
+        let source = "Open-Meteo \(model ?? "best match")"
+        let data = try await get(components.url!, source: source)
+        do {
+            let forecast = WeatherForecast(try JSONDecoder().decode(OpenMeteoResponse.self, from: data))
+            let c = forecast.current
+            let filled = [c?.temperature, c?.wind?.speedKn, c?.wind?.gustKn, c?.feelsLike].compactMap { $0 }.count
+            let temp = c?.temperature.map { String(format: "%.1f°", $0) } ?? "no temp"
+            let wind = c?.wind.map { String(format: "%.0f kn", $0.speedKn) } ?? "no wind"
+            await Diagnostics.shared.record(
+                source, ok: filled > 0,
+                summary: "\(forecast.hours.count) hours, \(forecast.days.count) days; now: \(temp), \(wind) (\(filled)/4 values)",
+                detail: snippet(data))
+            return forecast
+        } catch {
+            await Diagnostics.shared.record(source, ok: false, summary: "Couldn't read response: \(error)",
+                                            detail: snippet(data))
+            throw error
         }
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return WeatherForecast(try decoder.decode(OpenMeteoResponse.self, from: data))
+    }
+
+    /// GET with a timeout; records HTTP failures in Diagnostics.
+    private func get(_ url: URL, source: String) async throws -> Data {
+        do {
+            let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 20))
+            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                await Diagnostics.shared.record(source, ok: false, summary: "HTTP \(http.statusCode)", detail: snippet(data))
+                throw URLError(.badServerResponse)
+            }
+            return data
+        } catch let error as URLError where error.code != .badServerResponse {
+            await Diagnostics.shared.record(source, ok: false, summary: error.localizedDescription, detail: url.absoluteString)
+            throw error
+        }
     }
 
     /// Current wind at several points in one request (used for the course map).
-    func currentWind(at points: [CLLocationCoordinate2D]) async throws -> [WindNow] {
+    /// Uses the best-match blend, which always carries current wind.
+    func currentWind(at points: [CLLocationCoordinate2D]) async throws -> [WindNow?] {
         var components = URLComponents(string: "https://api.open-meteo.com/v1/forecast")!
         components.queryItems = [
-            .init(name: "latitude", value: points.map { String($0.latitude) }.joined(separator: ",")),
-            .init(name: "longitude", value: points.map { String($0.longitude) }.joined(separator: ",")),
+            .init(name: "latitude", value: points.map { String(format: "%.4f", $0.latitude) }.joined(separator: ",")),
+            .init(name: "longitude", value: points.map { String(format: "%.4f", $0.longitude) }.joined(separator: ",")),
             .init(name: "current", value: "wind_speed_10m,wind_direction_10m,wind_gusts_10m"),
             .init(name: "wind_speed_unit", value: "kn"),
             .init(name: "timeformat", value: "unixtime"),
-            .init(name: "models", value: "ukmo_seamless"),
         ]
-        let (data, _) = try await URLSession.shared.data(from: components.url!)
+        let source = "Open-Meteo course wind"
+        let data = try await get(components.url!, source: source)
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
         // One location returns an object, several return an array
         let responses: [OpenMeteoResponse]
-        if let many = try? decoder.decode([OpenMeteoResponse].self, from: data) {
-            responses = many
-        } else {
-            responses = [try decoder.decode(OpenMeteoResponse.self, from: data)]
+        do {
+            if let many = try? decoder.decode([OpenMeteoResponse].self, from: data) {
+                responses = many
+            } else {
+                responses = [try decoder.decode(OpenMeteoResponse.self, from: data)]
+            }
+        } catch {
+            await Diagnostics.shared.record(source, ok: false, summary: "Couldn't read response: \(error)", detail: snippet(data))
+            throw error
         }
-        return responses.map { r in
-            WindNow(speedKn: r.current?.windSpeed10m ?? 0,
-                    gustKn: r.current?.windGusts10m,
-                    fromDegrees: r.current?.windDirection10m ?? 0,
-                    time: Date(timeIntervalSince1970: TimeInterval(r.current?.time ?? 0)))
+        let winds: [WindNow?] = responses.map { r in
+            guard let c = r.current, let speed = c.windSpeed10m, let from = c.windDirection10m else { return nil }
+            return WindNow(speedKn: speed, gustKn: c.windGusts10m, fromDegrees: from,
+                           time: Date(timeIntervalSince1970: TimeInterval(c.time)))
         }
+        await Diagnostics.shared.record(source, ok: winds.contains { $0 != nil },
+                                        summary: "\(winds.compactMap { $0 }.count)/\(points.count) points with wind",
+                                        detail: snippet(data))
+        return winds
     }
 }
 
@@ -89,7 +123,8 @@ struct WeatherForecast: Sendable {
         let feelsLike: Double?
         let precipitation: Double?
         let code: Int?
-        let wind: WindNow
+        /// nil when the model gave no current wind.
+        let wind: WindNow?
     }
     struct Hour: Sendable, Identifiable {
         let time: Date
@@ -136,8 +171,7 @@ struct WeatherForecast: Sendable {
             mergedCurrent = Current(
                 time: c.time, temperature: c.temperature ?? o.temperature,
                 feelsLike: c.feelsLike ?? o.feelsLike, precipitation: c.precipitation ?? o.precipitation,
-                code: c.code ?? o.code,
-                wind: c.wind.speedKn > 0 || c.wind.fromDegrees > 0 ? c.wind : o.wind)
+                code: c.code ?? o.code, wind: c.wind ?? o.wind)
         } else {
             mergedCurrent = current ?? other.current
         }
@@ -164,9 +198,12 @@ struct WeatherForecast: Sendable {
             current = Current(time: Date(timeIntervalSince1970: TimeInterval(c.time)),
                               temperature: c.temperature2m, feelsLike: c.apparentTemperature,
                               precipitation: c.precipitation, code: c.weatherCode,
-                              wind: WindNow(speedKn: c.windSpeed10m ?? 0, gustKn: c.windGusts10m,
-                                            fromDegrees: c.windDirection10m ?? 0,
-                                            time: Date(timeIntervalSince1970: TimeInterval(c.time))))
+                              wind: c.windSpeed10m.flatMap { speed in
+                                  c.windDirection10m.map { from in
+                                      WindNow(speedKn: speed, gustKn: c.windGusts10m, fromDegrees: from,
+                                              time: Date(timeIntervalSince1970: TimeInterval(c.time)))
+                                  }
+                              })
         } else {
             current = nil
         }
@@ -215,6 +252,16 @@ struct OpenMeteoResponse: Decodable, Sendable {
         let windSpeed10m: Double?
         let windDirection10m: Double?
         let windGusts10m: Double?
+
+        enum CodingKeys: String, CodingKey {
+            case time, precipitation
+            case temperature2m = "temperature_2m"
+            case apparentTemperature = "apparent_temperature"
+            case weatherCode = "weather_code"
+            case windSpeed10m = "wind_speed_10m"
+            case windDirection10m = "wind_direction_10m"
+            case windGusts10m = "wind_gusts_10m"
+        }
     }
     struct Hourly: Decodable, Sendable {
         let time: [Int]
@@ -225,6 +272,16 @@ struct OpenMeteoResponse: Decodable, Sendable {
         let windSpeed10m: [Double?]?
         let windDirection10m: [Double?]?
         let windGusts10m: [Double?]?
+
+        enum CodingKeys: String, CodingKey {
+            case time, precipitation
+            case temperature2m = "temperature_2m"
+            case precipitationProbability = "precipitation_probability"
+            case weatherCode = "weather_code"
+            case windSpeed10m = "wind_speed_10m"
+            case windDirection10m = "wind_direction_10m"
+            case windGusts10m = "wind_gusts_10m"
+        }
     }
     struct Daily: Decodable, Sendable {
         let time: [Int]
@@ -237,6 +294,17 @@ struct OpenMeteoResponse: Decodable, Sendable {
         let windGusts10mMax: [Double?]?
         let sunrise: [Int?]?
         let sunset: [Int?]?
+
+        enum CodingKeys: String, CodingKey {
+            case time, sunrise, sunset
+            case weatherCode = "weather_code"
+            case temperature2mMax = "temperature_2m_max"
+            case temperature2mMin = "temperature_2m_min"
+            case precipitationSum = "precipitation_sum"
+            case precipitationProbabilityMax = "precipitation_probability_max"
+            case windSpeed10mMax = "wind_speed_10m_max"
+            case windGusts10mMax = "wind_gusts_10m_max"
+        }
     }
     let current: Current?
     let hourly: Hourly?

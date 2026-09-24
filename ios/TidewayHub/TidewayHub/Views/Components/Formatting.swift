@@ -61,28 +61,42 @@ enum FlagSchedule {
         return date.addingTimeInterval(12 * 3600)
     }
 
-    /// "Tonight 6pm", "Tomorrow 6am", "Wed 6pm"
+    /// "Today 18:00", "Tomorrow 06:00", "Wed 18:00"
     static func label(_ date: Date) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = london
-        let hour = calendar.component(.hour, from: date)
-        let time = hour < 12 ? "6am" : "6pm"
-        if calendar.isDateInToday(date) { return hour < 12 ? "This morning \(time)" : "Tonight \(time)" }
+        let time = UKTime.hm(date)
+        if calendar.isDateInToday(date) { return "Today \(time)" }
         if calendar.isDateInTomorrow(date) { return "Tomorrow \(time)" }
-        let formatter = DateFormatter()
-        formatter.timeZone = london
-        formatter.dateFormat = "EEE"
-        return "\(formatter.string(from: date)) \(time)"
+        return "\(UKTime.weekday(date)) \(time)"
     }
 
+    /// ("Wed", "18:00") for the prediction chips.
     static func shortLabel(_ date: Date) -> (day: String, time: String) {
-        let formatter = DateFormatter()
-        formatter.timeZone = london
-        formatter.dateFormat = "EEE"
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = london
-        return (formatter.string(from: date), calendar.component(.hour, from: date) < 12 ? "6am" : "6pm")
+        (UKTime.weekday(date), UKTime.hm(date))
     }
+}
+
+/// All times in the app: 24-hour clock, UK time, whatever the device's settings.
+enum UKTime {
+    private static func formatter(_ format: String) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_GB")
+        formatter.timeZone = FlagSchedule.london
+        formatter.dateFormat = format
+        return formatter
+    }
+
+    private static let hmFormatter = formatter("HH:mm")
+    private static let weekdayFormatter = formatter("EEE")
+    private static let dayHMFormatter = formatter("EEE HH:mm")
+
+    /// "06:00"
+    static func hm(_ date: Date) -> String { hmFormatter.string(from: date) }
+    /// "Wed"
+    static func weekday(_ date: Date) -> String { weekdayFormatter.string(from: date) }
+    /// "Wed 18:00"
+    static func dayHM(_ date: Date) -> String { dayHMFormatter.string(from: date) }
 }
 
 extension Date {

@@ -151,7 +151,7 @@ private struct WindyCard: View {
                     HStack(spacing: 14) {
                         ForEach(Array(upcoming), id: \.self) { w in
                             VStack(spacing: 4) {
-                                Text(w.time.formatted(.dateTime.hour())).font(.caption).foregroundStyle(.secondary)
+                                Text(UKTime.hm(w.time)).font(.caption).foregroundStyle(.secondary)
                                 WindArrow(fromDegrees: w.fromDegrees, size: 13)
                                 Text("\(Int(unit.value(fromKnots: w.speedKn).rounded()))").font(.subheadline.weight(.semibold))
                                 if let gust = w.gustKn {
