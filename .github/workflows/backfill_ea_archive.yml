@@ -1,0 +1,63 @@
+name: Backfill History from EA Archive
+
+# Works back through the EA's daily archive files to fill years of Richmond levels
+# (plus Kingston flow and the E8290 rain gauge), a batch of days per night, then
+# rebuilds the full flag history. Stops downloading once everything is filled.
+on:
+  schedule:
+    - cron: "13 2 * * *"   # nightly, 02:13 UTC
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "Earliest day to fill (YYYY-MM-DD)"
+        required: false
+        default: "2017-01-01"
+      end:
+        description: "Latest day to fill (YYYY-MM-DD, empty = yesterday)"
+        required: false
+        default: ""
+      max_days:
+        description: "Days to download this run (each file is tens of MB)"
+        required: false
+        default: "45"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: pipeline
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Backfill from EA archive
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python backfill_ea_archive.py "${{ inputs.start }}" "${{ inputs.end }}" "${{ inputs.max_days }}"
+
+      - name: Rebuild full flag history
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RICHMOND_CD_OFFSET: ${{ vars.RICHMOND_CD_OFFSET }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python build_ebb_flags.py --full

@@ -22,6 +22,7 @@ ios/TidewayHub/      SwiftUI app (see ios/README.md)
 | `ingest_upstream_flows.py`, `ingest_groundwater.py` | Daily flows and boreholes (EA Hydrology API) | daily |
 | `ingest_catchment_rain.py` | Catchment rain, evapotranspiration, soil moisture + forecast snapshots (Open-Meteo) | daily |
 | `ingest_isfield_rain.py` | Local rain gauge E8290 | every 6 h |
+| `backfill_ea_archive.py` | Years of Richmond levels, Kingston flow and E8290 rain from the EA daily archive, a batch per night, then rebuilds all flags | nightly until done |
 | `backfill_rain_forecasts.py`, `backfill_kingston_nrfa.py` | One-off history backfills | manual |
 
 Run locally: `cd pipeline && pip install -r requirements.txt -r requirements-ml.txt`,
