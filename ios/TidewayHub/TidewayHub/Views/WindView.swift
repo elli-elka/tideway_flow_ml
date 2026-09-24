@@ -20,7 +20,7 @@ struct WindView: View {
 
                 if let wind = store.windHere {
                     CrewWindCard(wind: wind, reach: store.reach, stream: store.feed?.richmond?.stream,
-                                 usingLocation: store.location.isAuthorized, unit: unit)
+                                 usingLocation: store.usingDeviceLocation, unit: unit)
                 }
                 if store.hasWindy {
                     WindyCard(forecast: store.windy, error: store.windyError, unit: unit)

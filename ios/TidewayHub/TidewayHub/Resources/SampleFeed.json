@@ -1122,5 +1122,47 @@
    "type": "low",
    "predicted_cd": 0.2
   }
+ ],
+ "rain_forecast": [
+  {
+   "day": "2026-07-28",
+   "catchment_mm": 0.0,
+   "chance": null
+  },
+  {
+   "day": "2026-07-29",
+   "catchment_mm": 0.2,
+   "chance": null
+  },
+  {
+   "day": "2026-07-30",
+   "catchment_mm": 0.0,
+   "chance": null
+  },
+  {
+   "day": "2026-07-31",
+   "catchment_mm": 1.1,
+   "chance": null
+  },
+  {
+   "day": "2026-08-01",
+   "catchment_mm": 6.4,
+   "chance": null
+  },
+  {
+   "day": "2026-08-02",
+   "catchment_mm": 9.8,
+   "chance": null
+  },
+  {
+   "day": "2026-08-03",
+   "catchment_mm": 3.2,
+   "chance": null
+  },
+  {
+   "day": "2026-08-04",
+   "catchment_mm": 0.4,
+   "chance": null
+  }
  ]
 }

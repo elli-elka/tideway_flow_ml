@@ -166,6 +166,23 @@ def tides_section(cur):
     return [e for e in events if e["t"] >= iso(now)] or None
 
 
+def rain_forecast_section(cur):
+    """Catchment-average rain forecast for the coming week from the latest daily
+    snapshot, so the app can show the rain the predictions are reacting to."""
+    if not table_exists(cur, "catchment_rain_forecast"):
+        return None
+    rows = query(cur, """
+        SELECT target_day, AVG(precip_mm), AVG(precip_prob)
+        FROM catchment_rain_forecast
+        WHERE issued_date = (SELECT MAX(issued_date) FROM catchment_rain_forecast)
+          AND target_day >= issued_date
+        GROUP BY target_day ORDER BY target_day LIMIT 8;""")
+    if not rows:
+        return None
+    return [{"day": day.isoformat(), "catchment_mm": rounded(mm, 1),
+             "chance": rounded(prob, 0) if prob is not None else None} for day, mm, prob in rows]
+
+
 # --------------------------------------------------
 # MAIN LOGIC
 # --------------------------------------------------
@@ -190,6 +207,7 @@ def main():
                 "richmond": richmond_section(cur, offset),
                 "kingston_flow": kingston_section(cur),
                 "tides": tides_section(cur),
+                "rain_forecast": rain_forecast_section(cur),
             }
 
     os.makedirs(out_dir, exist_ok=True)
