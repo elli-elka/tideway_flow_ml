@@ -1,15 +1,20 @@
-import os
 import sys
-import requests
 import psycopg
 from datetime import datetime, timedelta
-from dotenv import load_dotenv
+
+from common import TIMEOUT, get_database_url, http_session
 
 # --------------------------------------------------
 # CONFIG
 # --------------------------------------------------
 TABLE_NAME = "richmond_pla_levels"
 API_URL = "https://pla.co.uk/pla-proxy/one-minute?url=tides/chart/14541"
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/128.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://pla.co.uk/",
+}
 
 
 # --------------------------------------------------
@@ -32,12 +37,7 @@ def round_to_nearest_5_mins(ts_str):
 # --------------------------------------------------
 
 def main():
-    load_dotenv(override=True)
-    database_url = os.getenv("DATABASE_URL")
-
-    if not database_url:
-        print("ERROR: DATABASE_URL not set")
-        sys.exit(1)
+    database_url = get_database_url()
 
     # 1. Database Setup
     with psycopg.connect(database_url) as conn:
@@ -57,29 +57,27 @@ def main():
         conn.commit()
 
     # 2. Fetch data
+    # The PLA proxy returns 403 to requests without browser-like headers, and may
+    # block cloud IP ranges (e.g. GitHub Actions) altogether.
     print("Fetching Richmond tide data...")
+    session = http_session(headers=BROWSER_HEADERS)
     try:
-        response = requests.get(API_URL, timeout=30)
+        response = session.get(API_URL, timeout=TIMEOUT)
         response.raise_for_status()
         raw_data = response.json()
-
-                
-        print(f"Raw response keys: {raw_data.keys()}")
-        print(f"Heights count: {len(heights)}, Tpoints count: {len(tpoints)}")
-        print(f"First height sample: {heights[:2] if heights else 'EMPTY'}")
-
-        
-        
     except Exception as e:
-        print(f"Fetch failed: {e}")
-        return
+        # Exit non-zero so the workflow fails and sends an email instead of
+        # silently "succeeding" without any data
+        print(f"ERROR: Fetch failed: {e}")
+        sys.exit(1)
 
     heights = raw_data.get("heights", [])
     tpoints = raw_data.get("tpoints", [])
+    print(f"Heights count: {len(heights)}, Tpoints count: {len(tpoints)}")
 
     if not heights:
-        print("No data found.")
-        return
+        print("ERROR: No data found in response.")
+        sys.exit(1)
 
     # 3. Prepare Lookups
     turns_lookup = {}
@@ -113,8 +111,10 @@ def main():
                 obs = row.get("observed")
                 surge = row.get("surge")
 
-                # Initialize event as None
+                # Initialize event as None. The first `lookback` rows have no history,
+                # so their flow is unknown (NULL) and existing values are kept on upsert.
                 event = None
+                flow = None
                 
                 # Use a wider lookback to determine flow (15-20 mins)
                 lookback = 4 
@@ -147,19 +147,21 @@ def main():
                             event = "High"
 
                     current_flow = new_flow
-                
-                row["flow_memory"] = current_flow
+                    flow = current_flow
 
                 # 3. UPSERT
                 cur.execute(f"""
                     INSERT INTO {TABLE_NAME} (ts, predicted, observed, surge, tide_event, tidal_flow)
                     VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (ts) DO UPDATE 
-                    SET observed = EXCLUDED.observed,
-                        surge = EXCLUDED.surge,
-                        tidal_flow = EXCLUDED.tidal_flow,
-                        tide_event = EXCLUDED.tide_event;
-                """, (ts, pred, obs, surge, event, current_flow))
+                    ON CONFLICT (ts) DO UPDATE
+                    SET predicted = COALESCE(EXCLUDED.predicted, {TABLE_NAME}.predicted),
+                        observed = COALESCE(EXCLUDED.observed, {TABLE_NAME}.observed),
+                        surge = COALESCE(EXCLUDED.surge, {TABLE_NAME}.surge),
+                        tidal_flow = COALESCE(EXCLUDED.tidal_flow, {TABLE_NAME}.tidal_flow),
+                        tide_event = CASE WHEN EXCLUDED.tidal_flow IS NULL
+                                          THEN {TABLE_NAME}.tide_event
+                                          ELSE EXCLUDED.tide_event END;
+                """, (ts, pred, obs, surge, event, flow))
                 inserted_updated += 1
                 
         conn.commit()
