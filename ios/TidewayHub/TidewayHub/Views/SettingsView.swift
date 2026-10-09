@@ -88,7 +88,7 @@ private struct FlagLegendRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "flag.fill").foregroundStyle(colour.color)
+            FlagGlyph(colour: colour, size: 17)
             VStack(alignment: .leading) {
                 Text(colour.title).font(.subheadline.weight(.semibold))
                 Text(colour.summary).font(.caption).foregroundStyle(.secondary)

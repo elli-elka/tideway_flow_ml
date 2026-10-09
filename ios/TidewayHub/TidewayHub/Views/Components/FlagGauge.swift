@@ -24,6 +24,12 @@ struct FlagGauge: View {
             let radius = (diameter - lineWidth) / 2
             ZStack {
                 ForEach(Self.bands) { band in
+                    // Halo behind the black band so it shows up in dark mode
+                    Circle()
+                        .trim(from: fraction(band.from) + 0.002, to: fraction(band.to) - 0.002)
+                        .stroke(band.colour.halo, style: StrokeStyle(lineWidth: lineWidth + 3, lineCap: .round))
+                        .rotationEffect(.degrees(180))
+                        .frame(width: diameter - lineWidth, height: diameter - lineWidth)
                     Circle()
                         .trim(from: fraction(band.from) + 0.002, to: fraction(band.to) - 0.002)
                         .stroke(band.colour.color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))

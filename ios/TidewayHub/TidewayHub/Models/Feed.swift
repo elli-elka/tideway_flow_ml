@@ -12,6 +12,8 @@ struct Feed: Codable, Sendable {
     let richmond: Richmond?
     let kingstonFlow: KingstonFlow?
     let tides: [TideEvent]?
+    /// "pla" (PLA's own prediction) or "estimated" (harmonic fit to the EA gauge).
+    let tidesSource: String?
     /// Catchment-average rain forecast for the coming week (feeds the predictions).
     let rainForecast: [RainDay]?
     /// Chart datum offset for the EA Richmond gauge (level_cd = level_maod + offset).
@@ -26,8 +28,38 @@ struct Feed: Codable, Sendable {
         case currentFlag = "current_flag"
         case recentFlags = "recent_flags"
         case kingstonFlow = "kingston_flow"
+        case tidesSource = "tides_source"
         case rainForecast = "rain_forecast"
         case richmondCdOffset = "richmond_cd_offset"
+    }
+
+    /// Each optional section is decoded on its own, so one malformed section can't
+    /// hide the rest of the feed.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decode(Int.self, forKey: .version)
+        generatedAt = try c.decode(Date.self, forKey: .generatedAt)
+        disclaimer = try c.decode(String.self, forKey: .disclaimer)
+        officialFlagUrl = try c.decode(URL.self, forKey: .officialFlagUrl)
+        currentFlag = Self.section(c, .currentFlag)
+        recentFlags = Self.section(c, .recentFlags) ?? []
+        predictions = Self.section(c, .predictions)
+        richmond = Self.section(c, .richmond)
+        kingstonFlow = Self.section(c, .kingstonFlow)
+        tides = Self.section(c, .tides)
+        tidesSource = Self.section(c, .tidesSource)
+        rainForecast = Self.section(c, .rainForecast)
+        richmondCdOffset = Self.section(c, .richmondCdOffset)
+    }
+
+    private static func section<T: Decodable>(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> T? {
+        do {
+            return try c.decodeIfPresent(T.self, forKey: key)
+        } catch {
+            let message = "\(key.stringValue): \(error)"
+            Task { @MainActor in Diagnostics.shared.record("Feed section", ok: false, summary: message) }
+            return nil
+        }
     }
 
     static let decoder: JSONDecoder = {

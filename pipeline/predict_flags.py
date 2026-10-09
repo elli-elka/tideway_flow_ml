@@ -34,9 +34,10 @@ To see how predictions compared with the real flags:
 Usage: python predict_flags.py [--no-save]
 """
 
+import json
 import math
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -56,7 +57,7 @@ from common import get_database_url
 # CONFIG
 # --------------------------------------------------
 
-MODEL_VERSION = "scratch-v1"
+MODEL_VERSION = "scratch-v2"
 PREDICTIONS_TABLE = "ebb_flag_predictions"
 HORIZONS = range(1, 15)          # issues ahead (12h each) -> 7 days
 TEST_FRACTION = 0.25
@@ -141,6 +142,22 @@ def load(conn):
     if len(daily):
         daily.index = pd.to_datetime(daily.index).date
         daily = daily.sort_index()
+
+    # The observed (reanalysis) rain arrives ~6 days late, so the most recent days are
+    # missing exactly when they matter most. Fill them with the forecast issued on that
+    # same day (lead 0), which is the best estimate available at the time.
+    same_day = read_table(conn, """
+        SELECT target_day AS day, AVG(precip_mm) AS rain
+        FROM catchment_rain_forecast WHERE lead_days = 0 GROUP BY target_day""")
+    data["rain_days_filled"] = 0
+    if len(same_day):
+        same_day = same_day.set_index(pd.to_datetime(same_day.day).dt.date)["rain"]
+        daily = daily.reindex(daily.index.union(same_day.index)) if len(daily) else pd.DataFrame(index=same_day.index)
+        observed = daily["rain"] if "rain" in daily else pd.Series(np.nan, index=daily.index)
+        missing = observed.isna() & same_day.reindex(daily.index).notna()
+        daily["rain"] = observed.fillna(same_day)
+        data["rain_days_filled"] = int(missing.sum())
+        data["rain_filled_recent"] = sorted(d for d in daily.index[missing] if d >= date.today() - timedelta(days=14))
     data["daily"] = daily
     return data
 
@@ -153,12 +170,15 @@ def daily_features(daily, day):
     if not len(past):
         return {}
     f = {}
+    # Windows are calendar days before `day`, so a missing day can't shift them
     if "rain" in past:
         for n in (1, 3, 7, 14, 30):
-            window = past["rain"].iloc[-n:]
-            f[f"rain_{n}d"] = window.sum() if window.notna().any() else np.nan
+            window = past.loc[past.index >= day - timedelta(days=n), "rain"]
+            enough = window.notna().sum() >= max(1, int(n * 0.7))
+            f[f"rain_{n}d"] = window.sum() if enough else np.nan
     if "et0" in past:
-        f["et0_30d"] = past["et0"].iloc[-30:].sum() if past["et0"].notna().any() else np.nan
+        window = past.loc[past.index >= day - timedelta(days=30), "et0"]
+        f["et0_30d"] = window.sum() if window.notna().sum() >= 20 else np.nan
     for col in past.columns:
         if col.startswith(("flow_", "gw_", "soil_")) or col == "kingston_flow":
             series = past[col].dropna()
@@ -311,28 +331,63 @@ def predict(models, method, x, anchors):
     return models[method].predict(x) + np.asarray(anchors, dtype=float)
 
 
-def evaluate(df, features):
-    """Train on the older 75% of issues, test every method on the most recent 25%,
-    and pick the best method per horizon by mean absolute error."""
-    issues = np.sort(df.issued_at.unique())
-    cut = issues[int(len(issues) * (1 - TEST_FRACTION))]
-    train, test = df[df.issued_at < cut], df[df.issued_at >= cut]
-    features = [c for c in features if train[c].notna().sum() >= 2 and train[c].nunique() > 1]
-    models = fit_models(train, features)
+def score(test, models, features):
+    """Predictions from every method for a test frame -> long frame of errors."""
+    out = []
     truth = test.target_level.map(flag_for)
+    for m in METHODS:
+        pred = predict(models, m, test[features], test.anchor)
+        out.append(pd.DataFrame({
+            "horizon": test.horizon.values, "method": m, "issued_at": test.issued_at.values,
+            "error": pred - test.target_level.values,
+            "correct": pd.Series(pred).map(flag_for).values == truth.values,
+            "target_flag": truth.values,
+        }))
+    return pd.concat(out, ignore_index=True)
+
+
+def evaluate(df, features):
+    """Walk-forward test across the whole history, so wet and dry spells both count.
+
+    For each calendar month after the first few, train on everything before that month
+    and predict it. Errors are pooled over all months and the best method is picked per
+    horizon. (Testing only on the most recent quarter meant a dry summer decided the
+    method for the whole year.) Falls back to a single 75/25 split for short histories."""
+    df = df.copy()
+    month = df.issued_at.dt.tz_convert(UK).dt.to_period("M")
+    months = sorted(month.unique())
+    folds = []
+    for m in months:
+        train, test = df[month < m], df[month == m]
+        if train.issued_at.nunique() >= MIN_TRAIN_ISSUES and len(test):
+            folds.append((str(m), train, test))
+    if len(folds) < 2:
+        issues = np.sort(df.issued_at.unique())
+        cut = issues[int(len(issues) * (1 - TEST_FRACTION))]
+        folds = [("last 25%", df[df.issued_at < cut], df[df.issued_at >= cut])]
+
+    scored, fold_rows = [], []
+    for name, train, test in folds:
+        usable = [c for c in features if train[c].notna().sum() >= 2 and train[c].nunique() > 1]
+        s = score(test, fit_models(train, usable), usable)
+        scored.append(s)
+        mae = s.groupby("method").error.apply(lambda e: e.abs().mean())
+        not_black = (test.target_level.map(flag_for) != "BLACK").mean()
+        fold_rows.append((name, len(test), not_black, mae.get("same_as_now"), mae.get("ridge"), mae.get("gbm")))
+    scored = pd.concat(scored, ignore_index=True)
 
     rows = []
-    for h, g in test.groupby("horizon"):
-        r = {"horizon": h, "n": len(g)}
+    for h, g in scored.groupby("horizon"):
+        r = {"horizon": h, "n": int((g.method == "same_as_now").sum())}
         for m in METHODS:
-            pred = predict(models, m, g[features], g.anchor)
-            r[f"mae_{m}"] = np.abs(pred - g.target_level).mean()
-            r[f"acc_{m}"] = (pd.Series(pred).map(flag_for).values == truth[g.index].values).mean()
-            r[f"sigma_{m}"] = max(np.std(pred - g.target_level), 0.05)
+            e = g[g.method == m]
+            r[f"mae_{m}"] = e.error.abs().mean()
+            r[f"acc_{m}"] = e.correct.mean()
+            r[f"sigma_{m}"] = max(e.error.std(), 0.05)
         r["method"] = min(METHODS, key=lambda m: r[f"mae_{m}"])
         r["sigma"] = r[f"sigma_{r['method']}"]
         rows.append(r)
-    return pd.DataFrame(rows).set_index("horizon"), cut, len(train), len(test)
+    return pd.DataFrame(rows).set_index("horizon"), fold_rows
 
 
 def main():
@@ -366,9 +421,17 @@ def main():
             print(f"NOTE: {1 - rain_fc_share:.0%} of rows use observed rain in place of an archived "
                   f"forecast, so scores are optimistic. Run backfill_rain_forecasts.py.")
 
-        by_h, cut, n_train, n_test = evaluate(df, features)
-        print(f"\nBacktest: trained on issues before {cut:%Y-%m-%d} ({n_train} rows), "
-              f"tested on {n_test} rows after")
+        if data.get("rain_days_filled"):
+            recent = ", ".join(f"{d:%d %b}" for d in data.get("rain_filled_recent", []))
+            print(f"Rain: {data['rain_days_filled']} day(s) without observed rain filled from that day's forecast"
+                  + (f" (recent: {recent})" if recent else ""))
+
+        by_h, fold_rows = evaluate(df, features)
+        print(f"\nWalk-forward backtest over {len(fold_rows)} month(s) (each predicted by a model trained only on earlier data):")
+        print("  month     rows  not-black   MAE same_as_now  ridge    gbm")
+        for name, n, not_black, m_same, m_ridge, m_gbm in fold_rows:
+            print(f"  {name:<8} {n:>5}  {not_black:>8.0%}   {m_same:>14.3f} {m_ridge:>6.3f} {m_gbm:>6.3f}")
+        print("\nPooled over all months:")
         print("  days   MAE (m): same_as_now  ridge    gbm    | flag accuracy: same_as_now ridge  gbm  | using")
         for h, r in by_h.iterrows():
             print(f"  {h / 2:>4.1f}   {r.mae_same_as_now:>20.3f} {r.mae_ridge:>6.3f} {r.mae_gbm:>6.3f}"
@@ -385,7 +448,7 @@ def main():
                   f"forecast starts from there. Check the Richmond ingest is running.")
         base = base_features(flags, i_last, data)
         targets = list(issue_times(t_last.to_pydatetime(), t_last.to_pydatetime() + timedelta(days=7, hours=1)))
-        preds = []
+        preds, inputs = [], []
         for h, target in enumerate(targets[:len(HORIZONS)], start=1):
             x = pd.DataFrame([{**base, **target_features(t_last, target, h, data)}]).reindex(columns=features)
             method = by_h.method.get(h, "same_as_now")
@@ -393,6 +456,18 @@ def main():
             sigma = float(by_h.sigma.get(h, by_h.sigma.max()))
             probs = flag_probabilities(level, sigma)
             preds.append((t_last, target, h, level, probs, flag_for(level), method))
+            inputs.append({k: (None if pd.isna(v) else round(float(v), 4)) for k, v in x.iloc[0].items()})
+
+        # What the model was given for each horizon (also saved with the prediction)
+        shown = [c for c in ("rain_ahead", "rain_5d_before_target", "rain_7d", "rain_30d", "kingston_flow",
+                             "flow_staines", "soil_deep", "low_now") if c in features]
+        print("\nInputs per horizon:")
+        print("  days  " + "  ".join(f"{c[:14]:>14}" for c in shown))
+        for (_, _, h, *_), row in zip(preds, inputs):
+            print(f"  {h / 2:>4.1f}  " + "  ".join(f"{'-' if row.get(c) is None else round(row[c], 2):>14}" for c in shown))
+        missing = [c for c in shown if any(r.get(c) is None for r in inputs)]
+        if missing:
+            print(f"  (blank inputs: {', '.join(missing)})")
 
         print(f"\nForecast from the {t_last.astimezone(UK):%a %d %b %H:%M} flag "
               f"(current low {base['low_now']:.2f} m -> {flag_for(base['low_now'])}):")
@@ -419,6 +494,7 @@ def main():
                         PRIMARY KEY (base_issue, target_issue, model_version)
                     );
                     ALTER TABLE {PREDICTIONS_TABLE} ADD COLUMN IF NOT EXISTS method TEXT;
+                    ALTER TABLE {PREDICTIONS_TABLE} ADD COLUMN IF NOT EXISTS inputs JSONB;
                     -- Each prediction next to the real flag, once that flag has been issued
                     CREATE OR REPLACE VIEW ebb_flag_prediction_scores AS
                     SELECT p.base_issue, p.target_issue, p.horizon, p.model_version, p.method,
@@ -431,14 +507,15 @@ def main():
                 """)
                 cur.executemany(f"""
                     INSERT INTO {PREDICTIONS_TABLE} (base_issue, target_issue, horizon, model_version,
-                        pred_level_cd, flag, method, p_black, p_green, p_yellow, p_red)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        pred_level_cd, flag, method, p_black, p_green, p_yellow, p_red, inputs)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (base_issue, target_issue, model_version) DO UPDATE
                     SET pred_level_cd = EXCLUDED.pred_level_cd, flag = EXCLUDED.flag, method = EXCLUDED.method,
+                        inputs = EXCLUDED.inputs,
                         p_black = EXCLUDED.p_black, p_green = EXCLUDED.p_green,
                         p_yellow = EXCLUDED.p_yellow, p_red = EXCLUDED.p_red, created_at = NOW();
-                """, [(b, t, h, MODEL_VERSION, lvl, fl, m, p["BLACK"], p["GREEN"], p["YELLOW"], p["RED"])
-                      for b, t, h, lvl, p, fl, m in preds])
+                """, [(b, t, h, MODEL_VERSION, lvl, fl, m, p["BLACK"], p["GREEN"], p["YELLOW"], p["RED"],
+                       json.dumps(row)) for (b, t, h, lvl, p, fl, m), row in zip(preds, inputs)])
             conn.commit()
             print(f"\nSaved {len(preds)} predictions to {PREDICTIONS_TABLE}.")
 

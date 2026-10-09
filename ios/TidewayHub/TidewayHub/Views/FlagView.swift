@@ -18,18 +18,14 @@ struct FlagView: View {
                         TideChartCard(tide: tide)
                     }
                     HStack(alignment: .top, spacing: 16) {
-                        if let flow = feed.kingstonFlow { KingstonCard(flow: flow) }
-                        if let turns = store.liveTide?.upcomingTurns, !turns.isEmpty {
-                            TidesCard(tides: turns.map { TideEvent(t: $0.time, type: $0.isHigh ? "high" : "low",
-                                                                   predictedCd: $0.level ?? .nan) })
-                        } else if let tides = feed.tides, !tides.isEmpty {
-                            TidesCard(tides: tides)
-                        }
+                        KingstonCard(flow: feed.kingstonFlow)
+                        TidesCard(feed: feed, live: store.liveTide)
                     }
                     DisclaimerCard(text: feed.disclaimer, url: feed.officialFlagUrl)
                 } else {
                     OfficialFlagCard()
                     if let tide = store.tide { TideChartCard(tide: tide) }
+                    TidesCard(feed: nil, live: store.liveTide)
                     GlassCard(tint: .orange) {
                         Label("Predictions unavailable", systemImage: "exclamationmark.triangle.fill")
                             .font(.headline)
@@ -103,9 +99,7 @@ private struct CurrentFlagCard: View {
                 FlagGauge(level: issue?.levelCd)
                     .frame(height: 150)
                 VStack(spacing: 0) {
-                    Image(systemName: "flag.fill")
-                        .font(.system(size: 30, weight: .bold))
-                        .foregroundStyle(flag?.color ?? .secondary)
+                    FlagGlyph(colour: flag, size: 30)
                         .symbolEffect(.breathe)
                     Text(flag?.title ?? "–")
                         .font(.system(size: 46, weight: .heavy, design: .rounded))
@@ -138,19 +132,52 @@ private struct CurrentFlagCard: View {
     }
 }
 
-/// The PLA's own widget: the authoritative current flag.
+/// The official current flag, read from the PLA's own widget and drawn natively.
+/// If the widget's flag can't be read, the widget itself is shown at its fixed size.
 private struct OfficialFlagCard: View {
-    @State private var widgetSize = CGSize(width: 382, height: 442)
+    @State private var flag: FlagColour?
+    @State private var readAt: Date?
+    @State private var failed = false
 
     var body: some View {
-        GlassCard {
-            CardHeader(title: "Official PLA flag", systemImage: "checkmark.seal.fill", trailing: "pla.co.uk")
-            PLAFlagWidget(contentSize: $widgetSize)
-                .aspectRatio(widgetSize.width / widgetSize.height, contentMode: .fit)
-                .frame(maxWidth: min(widgetSize.width, 420))
-                .frame(maxWidth: .infinity)
-                .clipShape(.rect(cornerRadius: 18))
-                .animation(.snappy, value: widgetSize)
+        GlassCard(tint: flag.map { $0.color.opacity(0.18) }) {
+            CardHeader(title: "Official PLA flag", systemImage: "checkmark.seal.fill",
+                       trailing: readAt.map { "pla.co.uk · \(UKTime.hm($0))" } ?? "pla.co.uk")
+            if let flag {
+                HStack(spacing: 14) {
+                    FlagGlyph(colour: flag, size: 34)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(flag.title) flag").font(.title2.weight(.bold))
+                        Text("\(flag.summary) · low water \(flag.range)")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.vertical, 4)
+                .transition(.opacity)
+            } else if !failed {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Checking the PLA widget…").font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            // One web view throughout (so it loads once): full size only when its flag
+            // couldn't be read, otherwise collapsed out of sight.
+            PLAWidgetFrame { read in
+                withAnimation(.snappy) {
+                    if let read { flag = read; readAt = Date(); failed = false } else if flag == nil { failed = true }
+                }
+            }
+            .frame(maxWidth: failed && flag == nil ? 420 : 1, maxHeight: failed && flag == nil ? .infinity : 1)
+            .frame(maxWidth: .infinity)
+            .opacity(failed && flag == nil ? 1 : 0)
+            .clipShape(.rect(cornerRadius: 18))
+            .accessibilityHidden(!(failed && flag == nil))
+        }
+        .task {
+            // If the widget never finishes loading, show whatever it has
+            try? await Task.sleep(for: .seconds(12))
+            if flag == nil { withAnimation(.snappy) { failed = true } }
         }
     }
 }
@@ -231,10 +258,8 @@ private struct PredictionChip: View {
         let label = FlagSchedule.shortLabel(issue.issueAt)
         VStack(spacing: 6) {
             Text(label.day).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-            Circle()
-                .fill(issue.flag.color)
-                .overlay(Circle().stroke(.white.opacity(0.6), lineWidth: 1))
-                .frame(width: 26, height: 26)
+            FlagDot(colour: issue.flag, size: 26)
+                .overlay(Circle().stroke(.white.opacity(0.4), lineWidth: 1))
             Text(label.time).font(.caption.weight(.semibold))
             Text(issue.confidence, format: .percent.precision(.fractionLength(0)))
                 .font(.caption2).foregroundStyle(.secondary)
@@ -264,6 +289,7 @@ private struct PredictionDetail: View {
                     }
                 }
                 .clipShape(.capsule)
+                .overlay(Capsule().stroke(Color.primary.opacity(0.25), lineWidth: 1))
             }
             .frame(height: 10)
             HStack(spacing: 12) {
@@ -273,7 +299,7 @@ private struct PredictionDetail: View {
                         Label {
                             Text(p, format: .percent.precision(.fractionLength(0)))
                         } icon: {
-                            Circle().fill(colour.color).frame(width: 8, height: 8)
+                            FlagDot(colour: colour)
                         }
                         .font(.caption)
                     }
@@ -289,43 +315,75 @@ private struct PredictionDetail: View {
 }
 
 private struct KingstonCard: View {
-    let flow: KingstonFlow
+    let flow: KingstonFlow?
 
     var body: some View {
         GlassCard {
             VStack(alignment: .leading, spacing: 8) {
                 CardHeader(title: "Kingston flow", systemImage: "drop.fill")
-                Text("\(flow.flowM3s, format: .number.precision(.fractionLength(1))) m³/s")
-                    .font(.title3.weight(.semibold))
-                if let change = flow.change24h {
-                    Label("\(change >= 0 ? "+" : "")\(change, format: .number.precision(.fractionLength(1))) in 24 h",
-                          systemImage: change >= 0 ? "arrow.up.right" : "arrow.down.right")
+                if let flow {
+                    Text("\(flow.flowM3s, format: .number.precision(.fractionLength(1))) m³/s")
+                        .font(.title3.weight(.semibold))
+                    if let change = flow.change24h {
+                        Label("\(change >= 0 ? "+" : "")\(change, format: .number.precision(.fractionLength(1))) in 24 h",
+                              systemImage: change >= 0 ? "arrow.up.right" : "arrow.down.right")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if flow.series.count > 1 {
+                        Chart(flow.series) { point in
+                            LineMark(x: .value("Time", point.t), y: .value("Flow", point.flowM3s))
+                                .interpolationMethod(.catmullRom)
+                        }
+                        .chartXAxis(.hidden)
+                        .chartYAxis(.hidden)
+                        .frame(height: 50)
+                    }
+                    let stale = Date().timeIntervalSince(flow.latestAt) > 6 * 3600
+                    Label("Last updated \(UKTime.dayHM(flow.latestAt))", systemImage: stale ? "clock.badge.exclamationmark" : "clock")
+                        .font(.caption2)
+                        .foregroundStyle(stale ? .orange : .secondary)
+                } else {
+                    Text("No data").font(.title3.weight(.semibold)).foregroundStyle(.secondary)
+                    Text("The Kingston gauge hasn't reported recently.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Chart(flow.series) { point in
-                    LineMark(x: .value("Time", point.t), y: .value("Flow", point.flowM3s))
-                        .interpolationMethod(.catmullRom)
-                }
-                .chartXAxis(.hidden)
-                .chartYAxis(.hidden)
-                .frame(height: 50)
             }
         }
     }
 }
 
+/// Upcoming high and low waters, from the best source available: PLA live data on
+/// the phone, then the feed (PLA's prediction or the pipeline's harmonic estimate).
 private struct TidesCard: View {
-    let tides: [TideEvent]
+    let feed: Feed?
+    let live: LiveTide?
+
+    private var resolved: (events: [TideEvent], label: String, estimated: Bool) {
+        if let turns = live?.upcomingTurns, !turns.isEmpty {
+            return (turns.map { TideEvent(t: $0.time, type: $0.isHigh ? "high" : "low", predictedCd: $0.level ?? .nan) },
+                    "PLA live", false)
+        }
+        let upcoming = (feed?.tides ?? []).filter { $0.t > Date() }
+        let estimated = feed?.tidesSource == "estimated"
+        return (upcoming, estimated ? "Estimated" : "PLA", estimated)
+    }
 
     var body: some View {
+        let source = resolved
         GlassCard {
             VStack(alignment: .leading, spacing: 8) {
-                CardHeader(title: "Tides (PLA)", systemImage: "arrow.up.and.down")
-                ForEach(tides.prefix(4)) { tide in
+                CardHeader(title: "Tides", systemImage: "arrow.up.and.down",
+                           trailing: source.events.isEmpty ? nil : source.label)
+                if source.events.isEmpty {
+                    Text("No tide times yet").font(.subheadline).foregroundStyle(.secondary)
+                    Text("Pull down to refresh.").font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(source.events.prefix(4)) { tide in
                     HStack {
                         Image(systemName: tide.isHigh ? "arrow.up.to.line" : "arrow.down.to.line")
                             .foregroundStyle(tide.isHigh ? .cyan : .secondary)
-                        Text(UKTime.dayHM(tide.t))
+                        // Estimated low-water times are only good to about half an hour
+                        Text((source.estimated && !tide.isHigh ? "≈" : "") + UKTime.dayHM(tide.t))
                         Spacer()
                         if tide.predictedCd.isFinite {
                             Text("\(tide.predictedCd, format: .number.precision(.fractionLength(1))) m")
@@ -333,6 +391,10 @@ private struct TidesCard: View {
                         }
                     }
                     .font(.subheadline)
+                }
+                if source.estimated && !source.events.isEmpty {
+                    Text("From the Richmond gauge's recent tides; PLA times unavailable.")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
             }
         }

@@ -19,6 +19,7 @@ from build_ebb_flags import (EA_PLAUSIBLE, EA_TABLE, FLAGS_TABLE, PLA_TABLE, dro
                              get_offset, table_exists)
 from common import get_database_url
 from predict_flags import PREDICTIONS_TABLE
+from tides import FIT_DAYS, TideModel
 
 
 # --------------------------------------------------
@@ -28,6 +29,7 @@ from predict_flags import PREDICTIONS_TABLE
 FEED_VERSION = 1
 RICHMOND_HOURS = 36
 KINGSTON_DAYS = 14
+TIDE_DAYS = 7   # how far ahead to publish high/low water times
 DISCLAIMER = ("Unofficial. Flags here are reconstructed from public gauge data and "
               "predictions are experimental. Always check the official PLA Ebb Tide "
               "Flag before boating.")
@@ -134,7 +136,12 @@ def kingston_section(cur):
         FROM kingston_flow_readings WHERE ts > %s
         GROUP BY 1 ORDER BY 1;""", (since,))
     if not rows:
-        return None
+        # Nothing recent: still publish the last reading so the app can say how old it is
+        rows = query(cur, """
+            SELECT date_trunc('hour', ts), flow_m3s FROM kingston_flow_readings
+            WHERE flow_m3s IS NOT NULL ORDER BY ts DESC LIMIT 1;""")
+        if not rows:
+            return None
     series = rows[::3]  # every 3 hours is plenty for a sparkline
     if series[-1] != rows[-1]:
         series.append(rows[-1])
@@ -147,15 +154,14 @@ def kingston_section(cur):
     }
 
 
-def tides_section(cur):
+def pla_tides(cur, now):
     """Upcoming high/low waters from PLA's astronomical prediction, if stored."""
     if not table_exists(cur, PLA_TABLE):
-        return None
-    now = utc_now()
+        return []
     rows = query(cur, f"""
         SELECT ts, predicted FROM {PLA_TABLE}
         WHERE predicted IS NOT NULL AND ts BETWEEN %s AND %s ORDER BY ts;""",
-                 (now - timedelta(hours=1), now + timedelta(hours=48)))
+                 (now - timedelta(hours=1), now + timedelta(days=TIDE_DAYS)))
     events = []
     for i in range(1, len(rows) - 1):
         (_, prev), (ts, cur_level), (_, nxt) = rows[i - 1], rows[i], rows[i + 1]
@@ -163,7 +169,36 @@ def tides_section(cur):
             events.append({"t": iso(ts), "type": "high", "predicted_cd": rounded(cur_level, 2)})
         elif cur_level <= prev and cur_level < nxt:
             events.append({"t": iso(ts), "type": "low", "predicted_cd": rounded(cur_level, 2)})
-    return [e for e in events if e["t"] >= iso(now)] or None
+    return [e for e in events if e["t"] >= iso(now)]
+
+
+def estimated_tides(cur, now, offset):
+    """High/low waters from a harmonic tide model fitted to the last month of EA
+    Richmond readings (see tides.py). High-water times are good to ~5-20 minutes;
+    low waters are flatter and less certain."""
+    if offset is None or not table_exists(cur, EA_TABLE):
+        return []
+    readings = drop_spikes(query(cur, f"""
+        SELECT ts, water_level FROM {EA_TABLE} WHERE ts > %s AND ts <= %s ORDER BY ts;""",
+                                 (now - timedelta(days=FIT_DAYS), now)), EA_PLAUSIBLE)
+    model = TideModel.from_recent(readings, end=now) if readings else None
+    if model is None:
+        return []
+    return [{"t": iso(ts), "type": kind, "predicted_cd": rounded(level + offset, 2)}
+            for ts, kind, level in model.turning_points(now, now + timedelta(days=TIDE_DAYS))]
+
+
+def tides_section(cur, offset):
+    """Upcoming tide times: PLA's own prediction when the scraper has it, otherwise
+    our harmonic estimate, so the app always has tide times."""
+    now = utc_now()
+    pla = pla_tides(cur, now)
+    if len(pla) >= 4:
+        return pla, "pla"
+    estimated = estimated_tides(cur, now, offset)
+    if estimated:
+        return estimated, "estimated"
+    return (pla or None), ("pla" if pla else None)
 
 
 def rain_forecast_section(cur):
@@ -196,6 +231,7 @@ def main():
             have_pla, have_ea = table_exists(cur, PLA_TABLE), table_exists(cur, EA_TABLE)
             offset, _ = get_offset(cur, have_pla, have_ea)
             current, recent = flags_section(cur)
+            tides, tides_source = tides_section(cur, offset)
             feed = {
                 "version": FEED_VERSION,
                 "generated_at": iso(utc_now()),
@@ -206,7 +242,8 @@ def main():
                 "predictions": predictions_section(cur),
                 "richmond": richmond_section(cur, offset),
                 "kingston_flow": kingston_section(cur),
-                "tides": tides_section(cur),
+                "tides": tides,
+                "tides_source": tides_source,
                 "rain_forecast": rain_forecast_section(cur),
                 "richmond_cd_offset": rounded(offset) if offset is not None else None,
             }
@@ -217,7 +254,9 @@ def main():
         json.dump(feed, f, indent=1)
     flag = current["flag"] if current else "none"
     n_pred = len(feed["predictions"]["issues"]) if feed["predictions"] else 0
-    print(f"Wrote {path}: current flag {flag}, {n_pred} predictions")
+    n_tides = len(feed["tides"] or [])
+    print(f"Wrote {path}: current flag {flag}, {n_pred} predictions, "
+          f"{n_tides} tide times ({feed['tides_source'] or 'none'})")
 
 
 if __name__ == "__main__":
