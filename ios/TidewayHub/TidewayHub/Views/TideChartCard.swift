@@ -6,11 +6,11 @@ import SwiftUI
 struct TideChartCard: View {
     let tide: LiveTide
 
-    @State private var windowHours: Double = 6
+    @State private var windowHours: Double = 24
     @State private var showObserved = true
     @State private var showPredicted = true
     @State private var showSurge = false
-    @State private var scrollPosition = Date().addingTimeInterval(-4 * 3600)
+    @State private var scrollPosition = Date().addingTimeInterval(-16 * 3600)
     @State private var selectedTime: Date?
 
     private let zoomOptions: [Double] = [3, 6, 12, 24]
@@ -43,6 +43,33 @@ struct TideChartCard: View {
         .onAppear { centreOnNow(windowHours) }
     }
 
+    /// All three series flattened into one list; built from the data only, never from
+    /// the toggles, so the chart's marks stay the same as series are shown and hidden.
+    private var samples: [TideSample] {
+        var list: [TideSample] = []
+        for p in tide.points {
+            if let v = p.predicted { list.append(TideSample(time: p.time, value: v, series: .predicted)) }
+            if let v = p.observed { list.append(TideSample(time: p.time, value: v, series: .observed)) }
+            if let v = p.surge { list.append(TideSample(time: p.time, value: v, series: .surge)) }
+        }
+        return list
+    }
+
+    private func isVisible(_ series: TideSeries) -> Bool {
+        switch series {
+        case .observed: showObserved
+        case .predicted: showPredicted
+        case .surge: showSurge
+        }
+    }
+
+    /// Covers every series and the flag thresholds, rounded out to half metres.
+    private var yDomain: ClosedRange<Double> {
+        let values = tide.points.flatMap { [$0.observed, $0.predicted, $0.surge].compactMap { $0 } }
+        let low = min(values.min() ?? -0.5, -0.5), high = max(values.max() ?? 3, 3)
+        return (floor(low * 2) / 2)...(ceil(high * 2) / 2)
+    }
+
     private var hasPredicted: Bool { tide.points.contains { $0.predicted != nil } }
     private var hasSurge: Bool { tide.points.contains { $0.surge != nil } }
 
@@ -73,29 +100,14 @@ struct TideChartCard: View {
                     .foregroundStyle(line.colour.opacity(0.35))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
             }
-            if showPredicted {
-                ForEach(tide.points.filter { $0.predicted != nil }) { p in
-                    LineMark(x: .value("Time", p.time), y: .value("Level", p.predicted ?? 0),
-                             series: .value("Series", "Predicted"))
-                        .foregroundStyle(Color.secondary)
-                        .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
-                }
-            }
-            if showObserved {
-                ForEach(tide.points.filter { $0.observed != nil }) { p in
-                    LineMark(x: .value("Time", p.time), y: .value("Level", p.observed ?? 0),
-                             series: .value("Series", "Observed"))
-                        .foregroundStyle(Color.cyan)
-                        .lineStyle(StrokeStyle(lineWidth: 2.5))
-                }
-            }
-            if showSurge {
-                ForEach(tide.points.filter { $0.surge != nil }) { p in
-                    LineMark(x: .value("Time", p.time), y: .value("Level", p.surge ?? 0),
-                             series: .value("Series", "Surge"))
-                        .foregroundStyle(Color.orange)
-                        .lineStyle(StrokeStyle(lineWidth: 1.5))
-                }
+            // Every series is always in the chart and hidden ones are just made
+            // transparent: adding and removing marks confused the scrolling chart.
+            ForEach(samples) { sample in
+                LineMark(x: .value("Time", sample.time), y: .value("Level", sample.value),
+                         series: .value("Series", sample.series.rawValue))
+                    .foregroundStyle(sample.series.colour)
+                    .lineStyle(sample.series.stroke)
+                    .opacity(isVisible(sample.series) ? 1 : 0)
             }
             RuleMark(x: .value("Now", Date()))
                 .foregroundStyle(.primary.opacity(0.4))
@@ -106,10 +118,11 @@ struct TideChartCard: View {
                 RuleMark(x: .value("Selected", point.time))
                     .foregroundStyle(.primary.opacity(0.6))
                     .annotation(position: .top, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
-                        Readout(point: point)
+                        Readout(point: point, show: (showObserved, showPredicted, showSurge))
                     }
             }
         }
+        .chartYScale(domain: yDomain)   // fixed, so toggling a series doesn't rescale
         .chartYAxisLabel("m CD")
         .chartXAxis {
             AxisMarks(values: .stride(by: .hour, count: windowHours <= 6 ? 1 : (windowHours <= 12 ? 2 : 4))) { _ in
@@ -132,6 +145,33 @@ struct TideChartCard: View {
     private func centreOnNow(_ hours: Double) {
         scrollPosition = Date().addingTimeInterval(-hours * 3600 * 0.66)
     }
+}
+
+private enum TideSeries: String {
+    case observed = "Observed", predicted = "Predicted", surge = "Surge"
+
+    var colour: Color {
+        switch self {
+        case .observed: .cyan
+        case .predicted: .secondary
+        case .surge: .orange
+        }
+    }
+
+    var stroke: StrokeStyle {
+        switch self {
+        case .observed: StrokeStyle(lineWidth: 2.5)
+        case .predicted: StrokeStyle(lineWidth: 1.5, dash: [5, 4])
+        case .surge: StrokeStyle(lineWidth: 1.5)
+        }
+    }
+}
+
+private struct TideSample: Identifiable {
+    let time: Date
+    let value: Double
+    let series: TideSeries
+    var id: String { "\(series.rawValue)-\(time.timeIntervalSince1970)" }
 }
 
 private struct FlagLine: Identifiable {
@@ -166,13 +206,15 @@ private struct SeriesToggle: View {
 
 private struct Readout: View {
     let point: TidePoint
+    /// Which series are switched on: observed, predicted, surge.
+    let show: (Bool, Bool, Bool)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(UKTime.dayHM(point.time)).font(.caption2.weight(.bold))
-            if let observed = point.observed { row("Observed", observed, .cyan) }
-            if let predicted = point.predicted { row("Predicted", predicted, .secondary) }
-            if let surge = point.surge { row("Surge", surge, .orange) }
+            if show.0, let observed = point.observed { row("Observed", observed, .cyan) }
+            if show.1, let predicted = point.predicted { row("Predicted", predicted, .secondary) }
+            if show.2, let surge = point.surge { row("Surge", surge, .orange) }
         }
         .padding(8)
         .glassEffect(.regular, in: .rect(cornerRadius: 10))
