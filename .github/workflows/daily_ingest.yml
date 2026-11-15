@@ -2,7 +2,10 @@ name: Richmond Levels, Flags, Predictions & App Feed
 
 on:
   schedule:
-    - cron: "23 */6 * * *"   # off the top of the hour, when GitHub drops/delays fewer scheduled runs
+    # Every 3 hours, plus just after the 06:00 and 18:00 UK flag issues (05/17 UTC in
+    # summer time, 06/18 UTC in winter). Off the top of the hour, when GitHub drops or
+    # delays fewer scheduled runs; even so it often skips some, hence the extra slots.
+    - cron: "8 0,3,5,6,9,12,15,17,18,21 * * *"
   workflow_dispatch:        # "Run workflow" button; optionally backfill from a date
     inputs:
       since:
@@ -42,6 +45,16 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: |
           python ingest_ea_levels.py "${{ inputs.since }}"
+
+      # Kingston has its own workflow too, but GitHub often skips scheduled runs, so
+      # refresh it here as well to keep the feed's Kingston flow current
+      - name: Refresh Kingston flow
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python ingest_kingston_flow.py ""
 
       - name: Rebuild ebb tide flag history
         env:

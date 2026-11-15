@@ -1,33 +1,31 @@
-import Charts
 import SwiftUI
 
+/// The flag screen, in order of authority:
+///   1. the official PLA flag (read from the PLA's own widget);
+///   2. our own check, worked out from the Richmond gauge with the PLA's rule;
+///   3. the experimental forecast for the coming week.
 struct FlagView: View {
     @Environment(AppStore.self) private var store
+    @State private var showModelInfo = false
 
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
                 if let feed = store.feed {
                     FeedStatusBanner(feed: feed, source: store.feedSource, error: store.feedError)
-                    CurrentFlagCard(issue: feed.currentFlag, stream: store.tide?.stream ?? feed.richmond?.stream)
-                    OfficialFlagCard()
+                }
+                OfficialFlagCard()
+                if let feed = store.feed {
+                    GaugeCheckCard(issue: feed.currentFlag, official: store.officialFlag,
+                                   stream: store.tide?.stream ?? feed.richmond?.stream)
                     if let predictions = feed.predictions {
-                        PredictionsCard(predictions: predictions, rain: feed.rainForecast ?? [])
-                    }
-                    if let tide = store.tide {
-                        TideChartCard(tide: tide)
-                    }
-                    HStack(alignment: .top, spacing: 16) {
-                        KingstonCard(flow: feed.kingstonFlow)
-                        TidesCard(feed: feed, live: store.liveTide)
+                        ForecastCard(predictions: predictions, rain: feed.rainForecast ?? [],
+                                     showInfo: $showModelInfo)
                     }
                     DisclaimerCard(text: feed.disclaimer, url: feed.officialFlagUrl)
                 } else {
-                    OfficialFlagCard()
-                    if let tide = store.tide { TideChartCard(tide: tide) }
-                    TidesCard(feed: nil, live: store.liveTide)
                     GlassCard(tint: .orange) {
-                        Label("Predictions unavailable", systemImage: "exclamationmark.triangle.fill")
+                        Label("Forecast unavailable", systemImage: "exclamationmark.triangle.fill")
                             .font(.headline)
                         Text(store.feedError ?? "Loading…").font(.footnote).foregroundStyle(.secondary)
                         Button("Try again") { Task { await store.refreshFeed() } }
@@ -39,8 +37,14 @@ struct FlagView: View {
             .frame(maxWidth: 720)          // readable column on iPad
             .frame(maxWidth: .infinity)
         }
-        .screenBackground(store.feed?.currentFlag?.flag)
+        .screenBackground(store.displayFlag)
         .navigationTitle("Ebb Tide Flag")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("How this works", systemImage: "info.circle") { showModelInfo = true }
+            }
+        }
+        .sheet(isPresented: $showModelInfo) { ModelInfoSheet() }
         .refreshable {
             await store.refreshFeed()
             await store.refreshLiveTide()
@@ -74,47 +78,63 @@ private struct FeedStatusBanner: View {
     }
 }
 
-private struct CurrentFlagCard: View {
-    let issue: FlagIssue?
-    let stream: String?
+/// The official current flag, read from the PLA's own widget and drawn large. If the
+/// widget's flag can't be read, the widget itself is shown at its fixed size.
+private struct OfficialFlagCard: View {
+    @Environment(AppStore.self) private var store
+    @State private var failed = false
 
     var body: some View {
-        let flag = issue?.flag
-        VStack(spacing: 14) {
+        let flag = store.officialFlag
+        VStack(spacing: 12) {
             HStack {
-                Label("Latest from Richmond gauge", systemImage: "dot.radiowaves.left.and.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                Label("OFFICIAL · PLA", systemImage: "checkmark.seal.fill")
+                    .font(.caption.weight(.bold))
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .glassEffect(.regular.tint(.blue.opacity(0.35)), in: .capsule)
                 Spacer()
-                if let stream {
-                    Label(stream == "flood" ? "Flooding" : "Ebbing",
-                          systemImage: stream == "flood" ? "arrow.up.right" : "arrow.down.left")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                        .glassEffect(.regular.interactive(), in: .capsule)
+                if let readAt = store.officialFlagReadAt {
+                    Text("Checked \(UKTime.hm(readAt))").font(.caption).foregroundStyle(.secondary)
                 }
             }
-
-            ZStack(alignment: .bottom) {
-                FlagGauge(level: issue?.levelCd)
-                    .frame(height: 150)
-                VStack(spacing: 0) {
-                    FlagGlyph(colour: flag, size: 30)
+            if let flag {
+                VStack(spacing: 6) {
+                    FlagGlyph(colour: flag, size: 56)
                         .symbolEffect(.breathe)
-                    Text(flag?.title ?? "–")
-                        .font(.system(size: 46, weight: .heavy, design: .rounded))
-                        .contentTransition(.numericText())
+                    Text(flag.title.uppercased())
+                        .font(.system(size: 54, weight: .heavy, design: .rounded))
+                    Text(flag.summary).font(.headline)
+                    Text("Low water at Richmond \(flag.range)")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
-                .padding(.bottom, 2)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .transition(.opacity)
+            } else if !failed {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Checking the PLA's official flag…").font(.footnote).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 120)
             }
-
-            Text(flag?.summary ?? "No flag yet")
-                .font(.headline)
-            if let issue {
-                Text("Low water \(issue.levelCd, format: .number.precision(.fractionLength(2))) m · issued \(UKTime.dayHM(issue.issuedAt))")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+            // One web view throughout (so it loads once): full size only when its flag
+            // couldn't be read, otherwise collapsed out of sight.
+            PLAWidgetFrame { read in
+                withAnimation(.snappy) {
+                    if let read {
+                        store.officialFlag = read
+                        store.officialFlagReadAt = Date()
+                        failed = false
+                    } else if store.officialFlag == nil {
+                        failed = true
+                    }
+                }
             }
+            .frame(maxWidth: showWidget ? 420 : 1, maxHeight: showWidget ? .infinity : 1)
+            .frame(maxWidth: .infinity)
+            .opacity(showWidget ? 1 : 0)
+            .clipShape(.rect(cornerRadius: 18))
+            .accessibilityHidden(!showWidget)
 
             HStack {
                 Label("Next update \(FlagSchedule.label(FlagSchedule.nextIssue()))", systemImage: "clock")
@@ -128,75 +148,94 @@ private struct CurrentFlagCard: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity)
-        .glassEffect(.regular.tint((flag?.color ?? .gray).opacity(0.22)), in: .rect(cornerRadius: 34))
-    }
-}
-
-/// The official current flag, read from the PLA's own widget and drawn natively.
-/// If the widget's flag can't be read, the widget itself is shown at its fixed size.
-private struct OfficialFlagCard: View {
-    @State private var flag: FlagColour?
-    @State private var readAt: Date?
-    @State private var failed = false
-
-    var body: some View {
-        GlassCard(tint: flag.map { $0.color.opacity(0.18) }) {
-            CardHeader(title: "Official PLA flag", systemImage: "checkmark.seal.fill",
-                       trailing: readAt.map { "pla.co.uk · \(UKTime.hm($0))" } ?? "pla.co.uk")
-            if let flag {
-                HStack(spacing: 14) {
-                    FlagGlyph(colour: flag, size: 34)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(flag.title) flag").font(.title2.weight(.bold))
-                        Text("\(flag.summary) · low water \(flag.range)")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.vertical, 4)
-                .transition(.opacity)
-            } else if !failed {
-                HStack(spacing: 8) {
-                    ProgressView()
-                    Text("Checking the PLA widget…").font(.footnote).foregroundStyle(.secondary)
-                }
-            }
-            // One web view throughout (so it loads once): full size only when its flag
-            // couldn't be read, otherwise collapsed out of sight.
-            PLAWidgetFrame { read in
-                withAnimation(.snappy) {
-                    if let read { flag = read; readAt = Date(); failed = false } else if flag == nil { failed = true }
-                }
-            }
-            .frame(maxWidth: failed && flag == nil ? 420 : 1, maxHeight: failed && flag == nil ? .infinity : 1)
-            .frame(maxWidth: .infinity)
-            .opacity(failed && flag == nil ? 1 : 0)
-            .clipShape(.rect(cornerRadius: 18))
-            .accessibilityHidden(!(failed && flag == nil))
-        }
+        .glassEffect(.regular.tint((flag?.color ?? .gray).opacity(0.25)), in: .rect(cornerRadius: 34))
         .task {
             // If the widget never finishes loading, show whatever it has
             try? await Task.sleep(for: .seconds(12))
-            if flag == nil { withAnimation(.snappy) { failed = true } }
+            if store.officialFlag == nil { withAnimation(.snappy) { failed = true } }
+        }
+    }
+
+    private var showWidget: Bool { failed && store.officialFlag == nil }
+}
+
+/// Our own reading of the Richmond gauge using the PLA's rule: a cross-check on the
+/// official flag (and what the forecast starts from), never a replacement for it.
+private struct GaugeCheckCard: View {
+    let issue: FlagIssue?
+    let official: FlagColour?
+    let stream: String?
+
+    var body: some View {
+        GlassCard {
+            CardHeader(title: "Our check · Richmond gauge", systemImage: "dot.radiowaves.left.and.right",
+                       trailing: "unofficial")
+            HStack(alignment: .center, spacing: 16) {
+                FlagGauge(level: issue?.levelCd)
+                    .frame(width: 130, height: 70)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        if let flag = issue?.flag { FlagDot(colour: flag, size: 12) }
+                        Text(issue.map { "\($0.flag.title)" } ?? "No reading")
+                            .font(.title3.weight(.semibold))
+                    }
+                    if let issue {
+                        Text("Low water \(issue.levelCd, format: .number.precision(.fractionLength(2))) m · \(UKTime.dayHM(issue.issuedAt))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let stream {
+                        Label(stream == "flood" ? "Flooding now" : "Ebbing now",
+                              systemImage: stream == "flood" ? "arrow.up.right" : "arrow.down.left")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            if let official, let ours = issue?.flag {
+                Label(official == ours ? "Matches the official flag" : "Differs from the official flag: go by the PLA's",
+                      systemImage: official == ours ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(official == ours ? .green : .orange)
+            }
+            Text("Worked out from the Environment Agency's Richmond gauge using the PLA's rule (lowest level in the 12 hours before 06:00 or 18:00). The gauge and the PLA's own sensor can differ by a few centimetres.")
+                .font(.caption2).foregroundStyle(.secondary)
         }
     }
 }
 
-private struct PredictionsCard: View {
+/// The week-ahead forecast, styled to look provisional: dashed chips, an
+/// "experimental" badge, later days faded. Touch and hold for how it works.
+private struct ForecastCard: View {
     let predictions: Predictions
     let rain: [RainDay]
+    @Binding var showInfo: Bool
     @State private var selected: PredictedIssue?
+    @State private var holdCount = 0
 
     var body: some View {
         GlassCard {
             VStack(alignment: .leading, spacing: 12) {
-                CardHeader(title: "Coming up", systemImage: "sparkles",
-                           trailing: "Model \(predictions.modelVersion)")
+                HStack {
+                    Label("Forecast", systemImage: "sparkles")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text("EXPERIMENTAL")
+                        .font(.caption2.weight(.heavy))
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(Capsule().strokeBorder(.orange, style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+                        .foregroundStyle(.orange)
+                    Spacer()
+                    Button { showInfo = true } label: { Image(systemName: "info.circle") }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("How the forecast works")
+                }
                 ScrollView(.horizontal, showsIndicators: false) {
                     GlassEffectContainer(spacing: 8) {
                         HStack(spacing: 8) {
                             ForEach(predictions.issues) { issue in
-                                PredictionChip(issue: issue, isSelected: selected?.id == issue.id)
+                                PredictionChip(issue: issue, isSelected: selected?.id == issue.id,
+                                               isWeekAhead: issue.issueAt.timeIntervalSince(predictions.baseIssue) > 3 * 86400)
                                     .onTapGesture { withAnimation(.snappy) { selected = issue } }
                             }
                         }
@@ -210,8 +249,15 @@ private struct PredictionsCard: View {
                     Divider().opacity(0.4)
                     CatchmentRainStrip(days: rain)
                 }
+                Text("A model's guess, not the PLA's. The next day or two are usually close; beyond three days (faded) treat it as a rough guide, especially after heavy rain. Touch and hold for how it works.")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
         }
+        .onLongPressGesture(minimumDuration: 0.5) {
+            holdCount += 1
+            showInfo = true
+        }
+        .sensoryFeedback(.impact(weight: .medium), trigger: holdCount)
     }
 }
 
@@ -253,6 +299,7 @@ private struct CatchmentRainStrip: View {
 private struct PredictionChip: View {
     let issue: PredictedIssue
     let isSelected: Bool
+    let isWeekAhead: Bool
 
     var body: some View {
         let label = FlagSchedule.shortLabel(issue.issueAt)
@@ -266,8 +313,12 @@ private struct PredictionChip: View {
         }
         .frame(width: 54)
         .padding(.vertical, 10)
+        // Dashed outline: a forecast, not a reading
+        .overlay(RoundedRectangle(cornerRadius: 18)
+            .strokeBorder(.secondary.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
         .glassEffect(isSelected ? .regular.tint(issue.flag.color.opacity(0.5)).interactive() : .regular.interactive(),
                      in: .rect(cornerRadius: 18))
+        .opacity(isWeekAhead && !isSelected ? 0.6 : 1)
     }
 }
 
@@ -276,7 +327,7 @@ private struct PredictionDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\(FlagSchedule.label(issue.issueAt)): \(issue.flag.title), low water ≈ \(issue.levelCd, format: .number.precision(.fractionLength(2))) m")
+            Text("\(FlagSchedule.label(issue.issueAt)): probably \(issue.flag.title), low water ≈ \(issue.levelCd, format: .number.precision(.fractionLength(2))) m")
                 .font(.subheadline.weight(.semibold))
             // Probability bar across the four colours
             GeometryReader { geo in
@@ -314,93 +365,6 @@ private struct PredictionDetail: View {
     }
 }
 
-private struct KingstonCard: View {
-    let flow: KingstonFlow?
-
-    var body: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 8) {
-                CardHeader(title: "Kingston flow", systemImage: "drop.fill")
-                if let flow {
-                    Text("\(flow.flowM3s, format: .number.precision(.fractionLength(1))) m³/s")
-                        .font(.title3.weight(.semibold))
-                    if let change = flow.change24h {
-                        Label("\(change >= 0 ? "+" : "")\(change, format: .number.precision(.fractionLength(1))) in 24 h",
-                              systemImage: change >= 0 ? "arrow.up.right" : "arrow.down.right")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    if flow.series.count > 1 {
-                        Chart(flow.series) { point in
-                            LineMark(x: .value("Time", point.t), y: .value("Flow", point.flowM3s))
-                                .interpolationMethod(.catmullRom)
-                        }
-                        .chartXAxis(.hidden)
-                        .chartYAxis(.hidden)
-                        .frame(height: 50)
-                    }
-                    let stale = Date().timeIntervalSince(flow.latestAt) > 6 * 3600
-                    Label("Last updated \(UKTime.dayHM(flow.latestAt))", systemImage: stale ? "clock.badge.exclamationmark" : "clock")
-                        .font(.caption2)
-                        .foregroundStyle(stale ? .orange : .secondary)
-                } else {
-                    Text("No data").font(.title3.weight(.semibold)).foregroundStyle(.secondary)
-                    Text("The Kingston gauge hasn't reported recently.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-}
-
-/// Upcoming high and low waters, from the best source available: PLA live data on
-/// the phone, then the feed (PLA's prediction or the pipeline's harmonic estimate).
-private struct TidesCard: View {
-    let feed: Feed?
-    let live: LiveTide?
-
-    private var resolved: (events: [TideEvent], label: String, estimated: Bool) {
-        if let turns = live?.upcomingTurns, !turns.isEmpty {
-            return (turns.map { TideEvent(t: $0.time, type: $0.isHigh ? "high" : "low", predictedCd: $0.level ?? .nan) },
-                    "PLA live", false)
-        }
-        let upcoming = (feed?.tides ?? []).filter { $0.t > Date() }
-        let estimated = feed?.tidesSource == "estimated"
-        return (upcoming, estimated ? "Estimated" : "PLA", estimated)
-    }
-
-    var body: some View {
-        let source = resolved
-        GlassCard {
-            VStack(alignment: .leading, spacing: 8) {
-                CardHeader(title: "Tides", systemImage: "arrow.up.and.down",
-                           trailing: source.events.isEmpty ? nil : source.label)
-                if source.events.isEmpty {
-                    Text("No tide times yet").font(.subheadline).foregroundStyle(.secondary)
-                    Text("Pull down to refresh.").font(.caption).foregroundStyle(.secondary)
-                }
-                ForEach(source.events.prefix(4)) { tide in
-                    HStack {
-                        Image(systemName: tide.isHigh ? "arrow.up.to.line" : "arrow.down.to.line")
-                            .foregroundStyle(tide.isHigh ? .cyan : .secondary)
-                        // Estimated low-water times are only good to about half an hour
-                        Text((source.estimated && !tide.isHigh ? "≈" : "") + UKTime.dayHM(tide.t))
-                        Spacer()
-                        if tide.predictedCd.isFinite {
-                            Text("\(tide.predictedCd, format: .number.precision(.fractionLength(1))) m")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .font(.subheadline)
-                }
-                if source.estimated && !source.events.isEmpty {
-                    Text("From the Richmond gauge's recent tides; PLA times unavailable.")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-}
-
 private struct DisclaimerCard: View {
     let text: String
     let url: URL
@@ -416,6 +380,55 @@ private struct DisclaimerCard: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.glass)
+            }
+        }
+    }
+}
+
+// MARK: - How it works
+
+/// Plain-English explanation of where each flag on this screen comes from.
+struct ModelInfoSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppStore.self) private var store
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("The Ebb Tide Flag") {
+                    Text("The Port of London Authority sets the flag at 06:00 and 18:00 from the lowest tide level at Richmond in the previous 12 hours, in metres above chart datum: below 0 m black, 0–1.7 m green, 1.7–2.6 m yellow, 2.6 m or more red. A high low-water means a lot of fresh water coming down the river and a strong ebb.")
+                }
+                Section("Official flag") {
+                    Text("Read from the PLA's own embeddable flag widget each time you open the app. This is the one to go by.")
+                }
+                Section("Our check") {
+                    Text("The app applies the same rule to the Environment Agency's Richmond gauge (converted to chart datum with an offset calibrated against the PLA's readings). It should agree with the PLA; if it doesn't, the PLA's flag wins.")
+                }
+                Section("The forecast") {
+                    Text("Every few hours a model is retrained on the last year of flags and the things that drive them:")
+                    Label("Recent low waters and their trend", systemImage: "water.waves")
+                    Label("Spring and neap tides (moon phase)", systemImage: "moon.fill")
+                    Label("Rain over the Thames catchment, measured and forecast", systemImage: "cloud.rain.fill")
+                    Label("River flows at Kingston and upstream gauges", systemImage: "drop.fill")
+                    Label("Groundwater and soil moisture", systemImage: "square.3.layers.3d.down.right")
+                    Text("For each look-ahead (12 hours to 7 days) it compares three methods, \"same as now\", a linear model and a gradient-boosted tree model, by testing each month on data it hadn't seen, and uses the one that scored best. In dry spells \"same as now\" is often the most accurate, so the forecast can look flat; after heavy rain the other models take over.")
+                }
+                Section("How far to trust it") {
+                    Text("The next day or two are usually close. Beyond three days it depends on the rain forecast, which is itself uncertain, so treat the week ahead as speculative. The percentages show how sure the model is about each colour.")
+                }
+                if let model = store.feed?.predictions?.modelVersion {
+                    Section("Version") {
+                        LabeledContent("Model", value: model)
+                        if let base = store.feed?.predictions?.baseIssue {
+                            LabeledContent("Forecast from", value: UKTime.dayHM(base))
+                        }
+                    }
+                }
+            }
+            .navigationTitle("How this works")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
         }
     }

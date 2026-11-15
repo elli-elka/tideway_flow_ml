@@ -9,3 +9,4 @@ DerivedData/
 .DS_Store
 ios/TidewayHub/Config/Secrets.xcconfig
 ios/TidewayHub/TidewayHub/Info.plist
+ios/TidewayHub/TidewayWidget/Info.plist

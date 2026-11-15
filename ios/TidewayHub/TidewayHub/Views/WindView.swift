@@ -32,7 +32,7 @@ struct WindView: View {
             .frame(maxWidth: 720)
             .frame(maxWidth: .infinity)
         }
-        .screenBackground(store.feed?.currentFlag?.flag)
+        .screenBackground(store.displayFlag)
         .navigationTitle("Wind")
         .refreshable {
             await store.refreshCourseWind()

@@ -33,6 +33,37 @@ Re-run `xcodegen` whenever you add or remove Swift files.
 | Measured wind | Heathrow / London City METARs via aviationweather.gov | No |
 | Official current flag | PLA's embeddable Ebb Tide Flag widget | No |
 | Windy comparison (optional) | Windy Point Forecast API | Yes, built in (below) |
+| Kingston flow | EA gauge 3400TH, live (falls back to the feed) | No |
+| Water (sewage) | Thames Water Open Data storm overflow status | Yes, built in (below) |
+
+## Tabs, widget and alerts
+
+- **Flag:** the official PLA flag (large), our Richmond-gauge check, and the
+  experimental forecast. Touch and hold the forecast, or tap ⓘ, for how it works.
+- **River:** the tide chart (touch, hold and slide for levels), 3 days of high and
+  low water, Kingston flow and daylight.
+- **Weather:** now, wind on the course (map), next 24 hours and 7 days.
+- **Water:** storm overflows discharging near the river.
+- **More:** settings, alerts, home club and diagnostics.
+
+**Widget:** long-press the Home Screen or Lock Screen > Edit > Add Widget > Tideway Hub.
+
+**Alerts** (More > Alerts):
+- Flag changes, checked in the background just after 06:00 and 18:00. iOS sets the
+  exact timing.
+- Sewage discharges near the river.
+- Arriving at your home club. This needs location set to "Always" and shows the flag,
+  forecast and next tide on your lock screen.
+
+Background checks don't run in the Simulator. Use a real phone, or Xcode's
+*Debug > Simulate Background Fetch*.
+
+### Optional Thames Water key (sewage)
+
+Register at [data.thameswater.co.uk](https://data.thameswater.co.uk) and create an
+app to get a client ID and secret. Put them in `Config/Secrets.xcconfig` as
+`THAMES_WATER_CLIENT_ID` and `THAMES_WATER_CLIENT_SECRET`, then re-run `xcodegen`.
+Without them, the Water tab explains how to set this up.
 
 ### Optional Windy key
 

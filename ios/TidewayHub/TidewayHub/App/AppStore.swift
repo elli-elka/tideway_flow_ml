@@ -1,6 +1,7 @@
 import CoreLocation
 import Observation
 import SwiftUI
+import WidgetKit
 
 /// App-wide state: the pipeline feed plus live weather and wind.
 @MainActor @Observable
@@ -10,6 +11,13 @@ final class AppStore {
     var feedSource: FeedService.Source = .sample
     var feedError: String?
 
+    // The official flag, as read from the PLA's widget (see PLAFlagWidget)
+    var officialFlag: FlagColour?
+    var officialFlagReadAt: Date?
+
+    /// The flag to colour screens by: official when known, else our gauge reading.
+    var displayFlag: FlagColour? { officialFlag ?? feed?.currentFlag?.flag }
+
     // Live Richmond tide (PLA, else EA), refreshed every few minutes
     var liveTide: LiveTide?
 
@@ -17,6 +25,20 @@ final class AppStore {
     var tide: LiveTide? {
         liveTide ?? feed?.richmond.map { LiveTide(feed: $0) }
     }
+
+    // Kingston flow straight from the EA (the feed's copy can be hours old)
+    var liveKingston: KingstonFlow?
+    var kingston: KingstonFlow? {
+        guard let live = liveKingston else { return feed?.kingstonFlow }
+        guard let fromFeed = feed?.kingstonFlow else { return live }
+        return live.latestAt >= fromFeed.latestAt ? live : fromFeed
+    }
+
+    // Storm overflows (sewage) near the river, from Thames Water
+    var overflows: [StormOverflow] = []
+    var overflowsError: String?
+    var overflowsUpdated: Date?
+    var hasThamesWaterKey: Bool { StormOverflowService.bundledCredentials != nil }
 
     // Weather and wind
     var weather: WeatherForecast?
@@ -70,8 +92,30 @@ final class AppStore {
             group.addTask { await self.refreshObservations() }
             group.addTask { await self.refreshCourseWind() }
             group.addTask { await self.refreshWindy() }
+            group.addTask { await self.refreshKingston() }
+            group.addTask { await self.refreshOverflows() }
         }
         lastRefresh = Date()
+        // Same checks the background refresh does, so alerts also come while the app is open
+        await AlertService.shared.runChecks(offset: feed?.richmondCdOffset ?? 0.705)
+    }
+
+    func refreshKingston() async {
+        if let fresh = await KingstonService().load() { liveKingston = fresh }
+    }
+
+    func refreshOverflows() async {
+        guard let credentials = StormOverflowService.bundledCredentials else {
+            overflowsError = nil
+            return
+        }
+        do {
+            overflows = try await StormOverflowService(clientID: credentials.id, clientSecret: credentials.secret).nearTideway()
+            overflowsUpdated = Date()
+            overflowsError = nil
+        } catch {
+            overflowsError = error.localizedDescription
+        }
     }
 
     init() {
@@ -92,6 +136,8 @@ final class AppStore {
             tick += 1
             await refreshLiveTide()
             if tick % 3 == 0 {
+                await refreshKingston()
+                await refreshOverflows()
                 await refreshWeather()
                 await refreshObservations()
                 await refreshCourseWind()
@@ -115,6 +161,7 @@ final class AppStore {
             feed = fresh
             feedSource = .live
             feedError = nil
+            WidgetCenter.shared.reloadAllTimelines()
             Diagnostics.shared.record(
                 "Feed (GitHub Pages)", ok: true,
                 summary: "Live, generated \(fresh.generatedAt.ago); flag \(fresh.currentFlag?.flag.title ?? "none"), "
@@ -177,4 +224,16 @@ enum SettingsKey {
     static let feedURL = "feedURL"
     static let windUnit = "windUnit"
     static let showDiagnostics = "showDiagnostics"
+    // Notifications and home club
+    static let flagAlerts = "flagAlerts"
+    static let sewageAlerts = "sewageAlerts"
+    static let clubAlerts = "clubAlerts"
+    static let homeClub = "homeClub"
+    static let homeClubLatitude = "homeClubLatitude"
+    static let homeClubLongitude = "homeClubLongitude"
+    static let lastFlagIssue = "lastFlagIssue"
+    static let lastFlag = "lastFlag"
+    static let notifiedOverflows = "notifiedOverflows"
+    static let lastClubAlert = "lastClubAlert"
+    static let lastBackgroundCheck = "lastBackgroundCheck"
 }
