@@ -60,10 +60,24 @@ Background checks don't run in the Simulator. Use a real phone, or Xcode's
 
 ### Optional Thames Water key (sewage)
 
-Register at [data.thameswater.co.uk](https://data.thameswater.co.uk) and create an
-app to get a client ID and secret. Put them in `Config/Secrets.xcconfig` as
-`THAMES_WATER_CLIENT_ID` and `THAMES_WATER_CLIENT_SECRET`, then re-run `xcodegen`.
-Without them, the Water tab explains how to set this up.
+The Water tab uses the Open Data API v2 endpoint
+`https://api.thameswater.co.uk/opendata/v2/discharge/status`, falling back to the old
+v1 address. To get a key:
+
+1. Sign up on the [Thames Water API portal](https://docs.api.thameswater.co.uk/s/)
+   (the "API Experience Hub").
+2. In the *Application Catalog*, open **Open Data API** and request access, or create
+   an application that uses it. This gives you a **client ID** and **client secret**.
+3. Put them in `Config/Secrets.xcconfig`:
+   ```
+   THAMES_WATER_CLIENT_ID = your-client-id
+   THAMES_WATER_CLIENT_SECRET = your-client-secret
+   ```
+4. Re-run `xcodegen` and build.
+
+The app sends them as `client_id` and `client_secret` headers. If the Water tab shows
+an error, More > Advanced > Diagnostics shows Thames Water's response. Without a key,
+the Water tab explains how to set this up.
 
 ### Optional Windy key
 

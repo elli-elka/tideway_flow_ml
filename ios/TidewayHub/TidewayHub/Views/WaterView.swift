@@ -161,10 +161,10 @@ private struct SetupCard: View {
     var body: some View {
         GlassCard(tint: .orange) {
             Label("Thames Water key needed", systemImage: "key.fill").font(.headline)
-            Text("Live storm overflow data comes from Thames Water's free Open Data API. Register at data.thameswater.co.uk, create an app to get a client ID and secret, add them to Config/Secrets.xcconfig and rebuild (see ios/README.md).")
+            Text("Live storm overflow data comes from Thames Water's free Open Data API. Sign up on their API portal, create an application with access to the Open Data API to get a client ID and secret, add them to Config/Secrets.xcconfig and rebuild (see ios/README.md).")
                 .font(.footnote).foregroundStyle(.secondary)
-            Link(destination: URL(string: "https://data.thameswater.co.uk")!) {
-                Label("Thames Water Open Data", systemImage: "arrow.up.right.square")
+            Link(destination: URL(string: "https://docs.api.thameswater.co.uk/s/")!) {
+                Label("Thames Water API portal", systemImage: "arrow.up.right.square")
             }
             .buttonStyle(.glass)
         }

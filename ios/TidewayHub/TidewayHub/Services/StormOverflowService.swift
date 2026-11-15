@@ -5,10 +5,15 @@ import Foundation
 /// every storm overflow's monitor (EDM) says whether it is discharging right now.
 /// We keep the ones that discharge into or near the Thames between Walton and Putney.
 ///
-/// Needs a free Thames Water Open Data account (data.thameswater.co.uk): put its
+/// Needs a free Thames Water API account (docs.api.thameswater.co.uk): put its
 /// client ID and secret in Config/Secrets.xcconfig (see ios/README.md).
 struct StormOverflowService: Sendable {
-    static let endpoint = URL(string: "https://prod-tw-opendata-app.uk-e1.cloudhub.io/data/STE/v1/DischargeCurrentStatus")!
+    /// The current Open Data API (v2), then the older v1 address in case v2 isn't
+    /// enabled for your key.
+    static let endpoints = [
+        URL(string: "https://api.thameswater.co.uk/opendata/v2/discharge/status")!,
+        URL(string: "https://prod-tw-opendata-app.uk-e1.cloudhub.io/data/STE/v1/DischargeCurrentStatus")!,
+    ]
 
     static var bundledCredentials: (id: String, secret: String)? {
         let id = Bundle.main.object(forInfoDictionaryKey: "ThamesWaterClientID") as? String ?? ""
@@ -34,25 +39,39 @@ struct StormOverflowService: Sendable {
 
     /// All overflows near the Tideway, discharging ones first.
     func nearTideway() async throws -> [StormOverflow] {
+        var lastError: Error = Failure.unreadable
+        for endpoint in Self.endpoints {
+            do {
+                return try await nearTideway(from: endpoint)
+            } catch Failure.http(let code) where code == 401 || code == 403 {
+                throw Failure.http(code)   // the key is wrong; the other address won't help
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
+    private func nearTideway(from endpoint: URL) async throws -> [StormOverflow] {
         var all: [StormOverflow] = []
         var offset = 0
         let pageSize = 1000
         // A few pages at most (Thames Water has a few hundred overflows)
         for _ in 0..<5 {
-            let page = try await fetch(offset: offset, limit: pageSize)
+            let page = try await fetch(endpoint, offset: offset, limit: pageSize)
             all += page.overflows
             if page.rows < pageSize { break }
             offset += pageSize
         }
         let near = all.compactMap { $0.locatedNearTideway() }
         await Diagnostics.shared.record("Thames Water overflows", ok: true,
-                                        summary: "\(all.count) overflows, \(near.count) near the Tideway, "
+                                        summary: "\(endpoint.host ?? ""): \(all.count) overflows, \(near.count) near the Tideway, "
                                             + "\(near.filter { $0.status == .discharging }.count) discharging")
         return near.sorted { ($0.status.rank, $0.distanceToRiver) < ($1.status.rank, $1.distanceToRiver) }
     }
 
-    private func fetch(offset: Int, limit: Int) async throws -> (overflows: [StormOverflow], rows: Int) {
-        var components = URLComponents(url: Self.endpoint, resolvingAgainstBaseURL: false)!
+    private func fetch(_ endpoint: URL, offset: Int, limit: Int) async throws -> (overflows: [StormOverflow], rows: Int) {
+        var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
         components.queryItems = [.init(name: "limit", value: "\(limit)"), .init(name: "offset", value: "\(offset)")]
         var request = URLRequest(url: components.url!, timeoutInterval: 30)
         request.setValue(clientID, forHTTPHeaderField: "client_id")
@@ -60,17 +79,37 @@ struct StormOverflowService: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-            await Diagnostics.shared.record("Thames Water overflows", ok: false, summary: "HTTP \(http.statusCode)",
+            await Diagnostics.shared.record("Thames Water overflows", ok: false,
+                                            summary: "HTTP \(http.statusCode) from \(endpoint.host ?? "")",
                                             detail: snippet(data))
             throw Failure.http(http.statusCode)
         }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let items = json["items"] as? [[String: Any]] else {
-            await Diagnostics.shared.record("Thames Water overflows", ok: false, summary: "Unexpected response",
+        guard let json = try? JSONSerialization.jsonObject(with: data), let items = Self.rows(in: json) else {
+            await Diagnostics.shared.record("Thames Water overflows", ok: false,
+                                            summary: "Unexpected response from \(endpoint.host ?? "")",
                                             detail: snippet(data))
             throw Failure.unreadable
         }
-        return (items.compactMap(StormOverflow.init(row:)), items.count)
+        let overflows = items.compactMap(StormOverflow.init(row:))
+        if overflows.isEmpty && !items.isEmpty {
+            // Rows came back but none had a position we could read: show one to fix the field names
+            await Diagnostics.shared.record("Thames Water overflows", ok: false,
+                                            summary: "\(items.count) rows but no usable locations",
+                                            detail: snippet(data, limit: 600))
+        }
+        return (overflows, items.count)
+    }
+
+    /// The list of records, wherever the response puts it: a bare array, or under
+    /// "items" (v1), "data", "results" or similar, possibly one level down.
+    static func rows(in json: Any) -> [[String: Any]]? {
+        if let array = json as? [[String: Any]] { return array }
+        guard let object = json as? [String: Any] else { return nil }
+        for key in ["items", "data", "results", "records", "value", "discharges"] {
+            if let found = object[key].flatMap(rows(in:)) { return found }
+        }
+        // Otherwise the first value that is a list of records
+        return object.values.lazy.compactMap { $0 as? [[String: Any]] }.first
     }
 }
 
@@ -109,7 +148,15 @@ struct StormOverflow: Identifiable, Sendable, Hashable {
     init?(row: [String: Any]) {
         // Look keys up case-insensitively: the API's field names have changed before
         var fields: [String: Any] = [:]
-        for (key, value) in row { fields[key.lowercased()] = value }
+        for (key, value) in row {
+            fields[key.lowercased()] = value
+            // v2 may group fields (e.g. a "location" object): lift them up one level
+            if let nested = value as? [String: Any] {
+                for (innerKey, innerValue) in nested where fields[innerKey.lowercased()] == nil {
+                    fields[innerKey.lowercased()] = innerValue
+                }
+            }
+        }
         func text(_ key: String) -> String? {
             switch fields[key.lowercased()] {
             case let s as String: s
@@ -118,24 +165,26 @@ struct StormOverflow: Identifiable, Sendable, Hashable {
             }
         }
         func number(_ key: String) -> Double? { text(key).flatMap(Double.init) }
+        func first(_ keys: String...) -> String? { keys.lazy.compactMap(text).first }
+        func firstNumber(_ keys: String...) -> Double? { keys.lazy.compactMap(number).first }
 
-        name = text("LocationName") ?? "Storm overflow"
-        id = text("PermitNumber") ?? text("Id") ?? name
-        watercourse = text("ReceivingWaterCourse") ?? ""
-        let rawStatus = (text("AlertStatus") ?? "").lowercased()
+        name = first("LocationName", "Name", "SiteName") ?? "Storm overflow"
+        id = first("PermitNumber", "Id", "LocationGridRef") ?? name
+        watercourse = first("ReceivingWaterCourse", "ReceivingWater", "Watercourse") ?? ""
+        let rawStatus = (first("AlertStatus", "Status") ?? "").lowercased()
         status = rawStatus.hasPrefix("discharg") ? .discharging
             : rawStatus.contains("not") ? .notDischarging
             : rawStatus.contains("offline") ? .offline : .unknown
-        statusSince = FlexibleDate.parse(text("StatusChange"))
-        lastStart = FlexibleDate.parse(text("MostRecentDischargeAlertStart"))
-        lastStop = FlexibleDate.parse(text("MostRecentDischargeAlertStop"))
+        statusSince = FlexibleDate.parse(first("StatusChange", "StatusChanged", "StatusChangedDate"))
+        lastStart = FlexibleDate.parse(first("MostRecentDischargeAlertStart", "DischargeStart", "AlertStart"))
+        lastStop = FlexibleDate.parse(first("MostRecentDischargeAlertStop", "DischargeStop", "AlertStop"))
         let past = fields["alertpast48hours"]
         dischargedInPast48h = (past as? Bool) ?? ((past as? String)?.lowercased() == "true")
 
-        if let lat = number("Latitude"), let lon = number("Longitude") {
+        if let lat = firstNumber("Latitude", "Lat"), let lon = firstNumber("Longitude", "Lon", "Lng") {
             latitude = lat
             longitude = lon
-        } else if let x = number("X"), let y = number("Y"), x > 0, y > 0 {
+        } else if let x = firstNumber("X", "Easting"), let y = firstNumber("Y", "Northing"), x > 0, y > 0 {
             let position = BritishNationalGrid.toWGS84(easting: x, northing: y)
             latitude = position.0
             longitude = position.1
