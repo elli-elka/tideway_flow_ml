@@ -62,7 +62,7 @@ weather) the app fetches itself.
 | Open-Meteo | Catchment rain (ERA5 archive), forecast snapshots, past forecasts, soil moisture, evapotranspiration; UKMO weather in the app | pipeline, app | No |
 | PLA | Live tide chart for Richmond (14541); embeddable flag widget | app (PLA blocks GitHub's servers) | No |
 | aviationweather.gov | Heathrow and London City METARs | app | No |
-| Thames Water Open Data | Live storm overflow status | app | Yes (free) |
+| Thames Water Open Data API v2 | Live storm overflow status | app | No |
 | Windy | Point forecast comparison | app, optional | Yes |
 
 Licences and attribution are covered in section 11.
@@ -327,8 +327,8 @@ Optional keys go in `Config/Secrets.xcconfig` (git-ignored). Copy
 `Secrets.example.xcconfig` to make it.
 
 * `WINDY_API_KEY`
-* `THAMES_WATER_CLIENT_ID`
-* `THAMES_WATER_CLIENT_SECRET`
+* `THAMES_WATER_CLIENT_ID` and `THAMES_WATER_CLIENT_SECRET`: not needed now, since the v2
+  API is open; only if Thames Water starts requiring a key
 
 They're compiled into `Info.plist`. Keys in a shipped app can be extracted, so before
 the App Store these should move behind a small server or the pipeline.

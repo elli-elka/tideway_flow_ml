@@ -38,7 +38,6 @@ final class AppStore {
     var overflows: [StormOverflow] = []
     var overflowsError: String?
     var overflowsUpdated: Date?
-    var hasThamesWaterKey: Bool { StormOverflowService.bundledCredentials != nil }
 
     // Weather and wind
     var weather: WeatherForecast?
@@ -105,12 +104,8 @@ final class AppStore {
     }
 
     func refreshOverflows() async {
-        guard let credentials = StormOverflowService.bundledCredentials else {
-            overflowsError = nil
-            return
-        }
         do {
-            overflows = try await StormOverflowService(clientID: credentials.id, clientSecret: credentials.secret).nearTideway()
+            overflows = try await StormOverflowService().nearTideway()
             overflowsUpdated = Date()
             overflowsError = nil
         } catch {

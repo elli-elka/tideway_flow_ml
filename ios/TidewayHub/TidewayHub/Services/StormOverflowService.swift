@@ -5,15 +5,12 @@ import Foundation
 /// every storm overflow's monitor (EDM) says whether it is discharging right now.
 /// We keep the ones that discharge into or near the Thames between Walton and Putney.
 ///
-/// Needs a free Thames Water API account (docs.api.thameswater.co.uk): put its
-/// client ID and secret in Config/Secrets.xcconfig (see ios/README.md).
+/// The v2 API is open, so no key is needed. If a client ID and secret are set in
+/// Config/Secrets.xcconfig they're sent too, and the older v1 address (which needs
+/// them) is tried if v2 fails.
 struct StormOverflowService: Sendable {
-    /// The current Open Data API (v2), then the older v1 address in case v2 isn't
-    /// enabled for your key.
-    static let endpoints = [
-        URL(string: "https://api.thameswater.co.uk/opendata/v2/discharge/status")!,
-        URL(string: "https://prod-tw-opendata-app.uk-e1.cloudhub.io/data/STE/v1/DischargeCurrentStatus")!,
-    ]
+    static let openEndpoint = URL(string: "https://api.thameswater.co.uk/opendata/v2/discharge/status")!
+    static let keyedEndpoint = URL(string: "https://prod-tw-opendata-app.uk-e1.cloudhub.io/data/STE/v1/DischargeCurrentStatus")!
 
     static var bundledCredentials: (id: String, secret: String)? {
         let id = Bundle.main.object(forInfoDictionaryKey: "ThamesWaterClientID") as? String ?? ""
@@ -23,14 +20,14 @@ struct StormOverflowService: Sendable {
         return (trimmedID, trimmedSecret)
     }
 
-    let clientID: String
-    let clientSecret: String
+    var credentials: (id: String, secret: String)? = Self.bundledCredentials
 
     enum Failure: LocalizedError {
         case http(Int), unreadable
         var errorDescription: String? {
             switch self {
-            case .http(401), .http(403): "Thames Water refused the API key (HTTP 401/403). Check the client ID and secret."
+            case .http(401), .http(403): "Thames Water refused the request (HTTP 401/403)."
+                + (StormOverflowService.bundledCredentials == nil ? "" : " Check the client ID and secret in Secrets.xcconfig.")
             case .http(let code): "Thames Water returned HTTP \(code)."
             case .unreadable: "Thames Water's response couldn't be read."
             }
@@ -39,17 +36,13 @@ struct StormOverflowService: Sendable {
 
     /// All overflows near the Tideway, discharging ones first.
     func nearTideway() async throws -> [StormOverflow] {
-        var lastError: Error = Failure.unreadable
-        for endpoint in Self.endpoints {
-            do {
-                return try await nearTideway(from: endpoint)
-            } catch Failure.http(let code) where code == 401 || code == 403 {
-                throw Failure.http(code)   // the key is wrong; the other address won't help
-            } catch {
-                lastError = error
-            }
+        do {
+            return try await nearTideway(from: Self.openEndpoint)
+        } catch {
+            // The old address only works with a key
+            guard credentials != nil else { throw error }
+            return try await nearTideway(from: Self.keyedEndpoint)
         }
-        throw lastError
     }
 
     private func nearTideway(from endpoint: URL) async throws -> [StormOverflow] {
@@ -74,8 +67,10 @@ struct StormOverflowService: Sendable {
         var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
         components.queryItems = [.init(name: "limit", value: "\(limit)"), .init(name: "offset", value: "\(offset)")]
         var request = URLRequest(url: components.url!, timeoutInterval: 30)
-        request.setValue(clientID, forHTTPHeaderField: "client_id")
-        request.setValue(clientSecret, forHTTPHeaderField: "client_secret")
+        if let credentials {
+            request.setValue(credentials.id, forHTTPHeaderField: "client_id")
+            request.setValue(credentials.secret, forHTTPHeaderField: "client_secret")
+        }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {

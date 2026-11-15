@@ -54,8 +54,7 @@ final class AlertService {
     /// Runs when iOS wakes the app in the background, and on every foreground refresh.
     func runChecks(offset: Double) async {
         if flagAlerts != .off { await checkFlag(offset: offset) }
-        if sewageAlerts, let credentials = StormOverflowService.bundledCredentials,
-           let overflows = try? await StormOverflowService(clientID: credentials.id, clientSecret: credentials.secret).nearTideway() {
+        if sewageAlerts, let overflows = try? await StormOverflowService().nearTideway() {
             await checkSewage(overflows)
         }
         defaults.set(Date(), forKey: SettingsKey.lastBackgroundCheck)

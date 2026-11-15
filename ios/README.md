@@ -34,7 +34,7 @@ Re-run `xcodegen` whenever you add or remove Swift files.
 | Official current flag | PLA's embeddable Ebb Tide Flag widget | No |
 | Windy comparison (optional) | Windy Point Forecast API | Yes, built in (below) |
 | Kingston flow | EA gauge 3400TH, live (falls back to the feed) | No |
-| Water (sewage) | Thames Water Open Data storm overflow status | Yes, built in (below) |
+| Water (sewage) | Thames Water Open Data API v2, storm overflow status | No |
 
 ## Tabs, widget and alerts
 
@@ -58,26 +58,14 @@ Re-run `xcodegen` whenever you add or remove Swift files.
 Background checks don't run in the Simulator. Use a real phone, or Xcode's
 *Debug > Simulate Background Fetch*.
 
-### Optional Thames Water key (sewage)
+### Sewage data (no key needed)
 
-The Water tab uses the Open Data API v2 endpoint
-`https://api.thameswater.co.uk/opendata/v2/discharge/status`, falling back to the old
-v1 address. To get a key:
-
-1. Sign up on the [Thames Water API portal](https://docs.api.thameswater.co.uk/s/)
-   (the "API Experience Hub").
-2. In the *Application Catalog*, open **Open Data API** and request access, or create
-   an application that uses it. This gives you a **client ID** and **client secret**.
-3. Put them in `Config/Secrets.xcconfig`:
-   ```
-   THAMES_WATER_CLIENT_ID = your-client-id
-   THAMES_WATER_CLIENT_SECRET = your-client-secret
-   ```
-4. Re-run `xcodegen` and build.
-
-The app sends them as `client_id` and `client_secret` headers. If the Water tab shows
-an error, More > Advanced > Diagnostics shows Thames Water's response. Without a key,
-the Water tab explains how to set this up.
+The Water tab reads Thames Water's open
+`https://api.thameswater.co.uk/opendata/v2/discharge/status`, which needs no
+registration. If Thames Water ever starts requiring a key, put
+`THAMES_WATER_CLIENT_ID` and `THAMES_WATER_CLIENT_SECRET` in `Config/Secrets.xcconfig`.
+The app then sends them, and also tries the older v1 address, which needs them. If the
+tab shows an error, More > Advanced > Diagnostics shows Thames Water's response.
 
 ### Optional Windy key
 

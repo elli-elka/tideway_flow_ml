@@ -10,29 +10,25 @@ struct WaterView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                if !store.hasThamesWaterKey {
-                    SetupCard()
-                } else {
-                    SummaryCard(overflows: store.overflows, updated: store.overflowsUpdated, error: store.overflowsError)
-                    if !store.overflows.isEmpty {
-                        OverflowMap(overflows: store.overflows.filter(\.isRecent))
-                            .frame(height: 260)
-                            .clipShape(.rect(cornerRadius: 28))
-                        OverflowList(title: "Discharging now", systemImage: "exclamationmark.triangle.fill",
-                                     overflows: store.overflows.filter { $0.status == .discharging },
-                                     empty: "Nothing discharging near the Tideway right now.")
-                        OverflowList(title: "Stopped in the last 48 hours", systemImage: "clock.arrow.circlepath",
-                                     overflows: store.overflows.filter { $0.status != .discharging && $0.dischargedInPast48h },
-                                     empty: "None.")
-                        if showAll {
-                            OverflowList(title: "All monitored overflows nearby", systemImage: "list.bullet",
-                                         overflows: store.overflows.filter { !$0.isRecent }, empty: "None.")
-                        } else {
-                            Button("Show all \(store.overflows.count) overflows nearby") {
-                                withAnimation(.snappy) { showAll = true }
-                            }
-                            .buttonStyle(.glass)
+                SummaryCard(overflows: store.overflows, updated: store.overflowsUpdated, error: store.overflowsError)
+                if !store.overflows.isEmpty {
+                    OverflowMap(overflows: store.overflows.filter(\.isRecent))
+                        .frame(height: 260)
+                        .clipShape(.rect(cornerRadius: 28))
+                    OverflowList(title: "Discharging now", systemImage: "exclamationmark.triangle.fill",
+                                 overflows: store.overflows.filter { $0.status == .discharging },
+                                 empty: "Nothing discharging near the Tideway right now.")
+                    OverflowList(title: "Stopped in the last 48 hours", systemImage: "clock.arrow.circlepath",
+                                 overflows: store.overflows.filter { $0.status != .discharging && $0.dischargedInPast48h },
+                                 empty: "None.")
+                    if showAll {
+                        OverflowList(title: "All monitored overflows nearby", systemImage: "list.bullet",
+                                     overflows: store.overflows.filter { !$0.isRecent }, empty: "None.")
+                    } else {
+                        Button("Show all \(store.overflows.count) overflows nearby") {
+                            withAnimation(.snappy) { showAll = true }
                         }
+                        .buttonStyle(.glass)
                     }
                 }
                 AdviceCard()
@@ -154,20 +150,6 @@ private struct OverflowMap: View {
             }
         }
         .mapStyle(.standard(pointsOfInterest: .excludingAll))
-    }
-}
-
-private struct SetupCard: View {
-    var body: some View {
-        GlassCard(tint: .orange) {
-            Label("Thames Water key needed", systemImage: "key.fill").font(.headline)
-            Text("Live storm overflow data comes from Thames Water's free Open Data API. Sign up on their API portal, create an application with access to the Open Data API to get a client ID and secret, add them to Config/Secrets.xcconfig and rebuild (see ios/README.md).")
-                .font(.footnote).foregroundStyle(.secondary)
-            Link(destination: URL(string: "https://docs.api.thameswater.co.uk/s/")!) {
-                Label("Thames Water API portal", systemImage: "arrow.up.right.square")
-            }
-            .buttonStyle(.glass)
-        }
     }
 }
 

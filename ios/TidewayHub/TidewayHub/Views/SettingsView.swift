@@ -23,7 +23,6 @@ struct SettingsView: View {
                     ForEach(AlertService.FlagAlerts.allCases) { Text($0.rawValue).tag($0.rawValue) }
                 }
                 Toggle("Sewage discharges nearby", isOn: $sewageAlerts)
-                    .disabled(!store.hasThamesWaterKey)
                 Toggle("Arriving at my club", isOn: $clubAlerts)
                 if clubAlerts {
                     Picker("Home club", selection: $homeClub) {
@@ -118,7 +117,6 @@ struct SettingsView: View {
 extension SettingsView {
     private var alertsFooter: String {
         var text = "Flag alerts are worked out on your phone from the Richmond gauge just after 06:00 and 18:00. iOS decides exactly when the app can check in the background, so they can be a little late, and they stop if you force-quit the app or turn off Background App Refresh."
-        if !store.hasThamesWaterKey { text += " Sewage alerts need a Thames Water key (see the Water tab)." }
         text += " Arriving at your club shows the flag, forecast and next tide on your lock screen; it needs location access set to Always."
         return text
     }
