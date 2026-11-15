@@ -9,6 +9,11 @@ enum FlagColour: String, Codable, CaseIterable, Sendable {
     case yellow = "YELLOW"
     case red = "RED"
 
+    /// The flag for a 12-hour low water (metres above chart datum).
+    init(level: Double) {
+        self = level >= 2.6 ? .red : level >= 1.7 ? .yellow : level >= 0 ? .green : .black
+    }
+
     var title: String { rawValue.capitalized }
 
     var color: Color {

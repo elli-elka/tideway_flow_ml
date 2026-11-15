@@ -1,4 +1,3 @@
-import CoreLocation
 import Charts
 import SwiftUI
 
@@ -15,14 +14,14 @@ struct WeatherView: View {
                 }
                 if let weather = store.weather {
                     if let current = weather.current {
-                        CurrentConditionsCard(current: current, unit: unit,
+                        CurrentConditionsCard(current: current, observations: store.observations, unit: unit,
                                               placeName: store.usingDeviceLocation ? "Your location" : "Putney")
                     }
-                    if !store.observations.isEmpty {
-                        ObservationsCard(observations: store.observations, unit: unit)
+                    NavigationLink { WindView() } label: {
+                        CourseWindLink(wind: store.windHere, reach: store.reach, unit: unit)
                     }
+                    .buttonStyle(.plain)
                     HourlyCard(hours: weather.next24Hours, unit: unit)
-                    DaylightCard(coordinate: store.coordinate)
                     DailyCard(days: weather.days, unit: unit)
                     Text("Forecast: Met Office UKMO model via Open-Meteo (CC BY 4.0). Measured wind: aviationweather.gov.")
                         .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -34,7 +33,7 @@ struct WeatherView: View {
             .frame(maxWidth: 720)
             .frame(maxWidth: .infinity)
         }
-        .screenBackground(store.feed?.currentFlag?.flag)
+        .screenBackground(store.displayFlag)
         .navigationTitle("Weather")
         .refreshable {
             await store.refreshWeather()
@@ -45,6 +44,7 @@ struct WeatherView: View {
 
 private struct CurrentConditionsCard: View {
     let current: WeatherForecast.Current
+    let observations: [WindObservation]
     let unit: WindUnit
     let placeName: String
 
@@ -73,38 +73,65 @@ private struct CurrentConditionsCard: View {
                 } else {
                     Text("Wind: no data").font(.headline).foregroundStyle(.secondary)
                 }
+                if !observations.isEmpty {
+                    Divider().opacity(0.4)
+                    MeasuredWind(observations: observations, unit: unit)
+                }
             }
         }
     }
 }
 
-private struct ObservationsCard: View {
+/// Measured wind at the airports, shown inside the "now" card.
+private struct MeasuredWind: View {
     let observations: [WindObservation]
     let unit: WindUnit
 
     var body: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 10) {
-                CardHeader(title: "Measured wind now", systemImage: "gauge.with.dots.needle.33percent")
-                ForEach(observations) { obs in
-                    HStack {
-                        Text(obs.station).font(.subheadline.weight(.medium))
-                        Spacer()
-                        if let from = obs.fromDegrees {
-                            WindArrow(fromDegrees: from, size: 14)
-                            Text(Compass.point(from)).font(.subheadline).foregroundStyle(.secondary)
-                        } else {
-                            Text("Variable").font(.subheadline).foregroundStyle(.secondary)
-                        }
-                        Text(unit.format(obs.speedKn)).font(.subheadline.weight(.semibold))
-                        if let gust = obs.gustKn {
-                            Text("gust \(Int(unit.value(fromKnots: gust).rounded()))")
-                                .font(.caption.weight(.semibold)).foregroundStyle(.orange)
-                        }
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Measured now", systemImage: "gauge.with.dots.needle.33percent")
+                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            ForEach(observations) { obs in
+                HStack {
+                    Text(obs.station).font(.subheadline.weight(.medium))
+                    Spacer()
+                    if let from = obs.fromDegrees {
+                        WindArrow(fromDegrees: from, size: 14)
+                        Text(Compass.point(from)).font(.subheadline).foregroundStyle(.secondary)
+                    } else {
+                        Text("Variable").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    Text(unit.format(obs.speedKn)).font(.subheadline.weight(.semibold))
+                    if let gust = obs.gustKn {
+                        Text("gust \(Int(unit.value(fromKnots: gust).rounded()))")
+                            .font(.caption.weight(.semibold)).foregroundStyle(.orange)
                     }
                 }
-                Text("Airport reports, updated about every 30 minutes.")
-                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            Text("Airport reports, updated about every 30 minutes.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Tap through to the wind map along the course.
+private struct CourseWindLink: View {
+    let wind: WindNow?
+    let reach: Tideway.Reach
+    let unit: WindUnit
+
+    var body: some View {
+        GlassCard {
+            HStack(spacing: 12) {
+                Image(systemName: "map.fill").font(.title2).foregroundStyle(.cyan)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Wind on the course").font(.headline)
+                    Text(wind.map { "\(CrewWind(wind: $0, heading: reach.upstreamBearing).description) going upstream at \(reach.from.name)" }
+                         ?? "Map of the wind from Putney to Richmond")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
             }
         }
     }
@@ -164,54 +191,6 @@ private struct HourlyCard: View {
     }
 }
 
-/// First light, sunrise, sunset and last light for today and tomorrow. After today's
-/// last light, tomorrow comes first: that's what a cox planning an early outing needs.
-private struct DaylightCard: View {
-    let coordinate: CLLocationCoordinate2D
-
-    var body: some View {
-        let now = Date()
-        let today = SunTimes.day(containing: now, at: coordinate)
-        let tomorrow = SunTimes.day(containing: now.addingTimeInterval(86400), at: coordinate)
-        let evening = (today.lastLight ?? today.sunset ?? now) < now
-        let columns = evening ? [("Tomorrow", tomorrow), ("Today", today)] : [("Today", today), ("Tomorrow", tomorrow)]
-
-        GlassCard {
-            CardHeader(title: "Daylight", systemImage: "sun.horizon.fill")
-            HStack(alignment: .top, spacing: 12) {
-                ForEach(columns.indices, id: \.self) { index in
-                    let title = columns[index].0
-                    let day = columns[index].1
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(title).font(.subheadline.weight(.semibold))
-                        row("First light", day.firstLight, "sun.haze")
-                        row("Sunrise", day.sunrise, "sunrise.fill")
-                        row("Sunset", day.sunset, "sunset.fill")
-                        row("Last light", day.lastLight, "moon.haze")
-                    }
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .glassEffect(index == 0 ? .regular.tint(.yellow.opacity(0.18)) : .regular,
-                                 in: .rect(cornerRadius: 18))
-                }
-            }
-            Text("First and last light are civil twilight (sun 6° below the horizon). Boats need lights on the Tideway in darkness and poor visibility; check the Tideway Code.")
-                .font(.caption2).foregroundStyle(.secondary)
-        }
-    }
-
-    private func row(_ title: String, _ time: Date?, _ symbol: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: symbol)
-                .symbolRenderingMode(.multicolor)
-                .frame(width: 20)
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Spacer(minLength: 4)
-            Text(time.map(UKTime.hm) ?? "–").font(.subheadline.weight(.semibold)).monospacedDigit()
-        }
-    }
-}
-
 private struct DailyCard: View {
     let days: [WeatherForecast.Day]
     let unit: WindUnit
@@ -224,25 +203,54 @@ private struct DailyCard: View {
         GlassCard {
             VStack(alignment: .leading, spacing: 10) {
                 CardHeader(title: "7 days", systemImage: "calendar")
+                let lowest = days.compactMap(\.low).min() ?? 0
+                let highest = days.compactMap(\.high).max() ?? 20
                 ForEach(days) { day in
-                    HStack(spacing: 12) {
+                    HStack(spacing: 10) {
                         Text(Calendar.current.isDateInToday(day.date) ? "Today" : UKTime.weekday(day.date))
-                            .frame(width: 52, alignment: .leading)
+                            .font(.subheadline.weight(.medium))
+                            .frame(width: 48, alignment: .leading)
                         Image(systemName: WeatherSymbol.of(day.code).symbol)
                             .symbolRenderingMode(.multicolor)
-                            .frame(width: 28)
-                        Text(day.rain.map { String(format: "%.1f mm", $0) } ?? "–")
-                            .font(.caption).foregroundStyle(.blue)
-                            .frame(width: 58, alignment: .leading)
-                        Spacer()
-                        Text(unit.format(day.windMaxKn) + " · gust " + gust(day.gustMaxKn))
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text(degrees(day.low) + " / " + degrees(day.high))
-                            .font(.subheadline.weight(.medium))
-                            .frame(width: 72, alignment: .trailing)
+                            .frame(width: 26)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(unit.format(day.windMaxKn) + " · gust " + gust(day.gustMaxKn))
+                                .font(.caption)
+                            Text(day.rain.map { $0 >= 0.1 ? String(format: "%.1f mm rain", $0) : "Dry" } ?? "–")
+                                .font(.caption2).foregroundStyle(.blue)
+                        }
+                        .frame(width: 92, alignment: .leading)
+                        Text(degrees(day.low)).font(.caption).foregroundStyle(.secondary)
+                            .frame(width: 30, alignment: .trailing)
+                        TemperatureBar(low: day.low, high: day.high, lowest: lowest, highest: highest)
+                            .frame(height: 6)
+                        Text(degrees(day.high)).font(.caption.weight(.semibold))
+                            .frame(width: 30, alignment: .leading)
                     }
-                    .font(.subheadline)
+                    if day.id != days.last?.id { Divider().opacity(0.3) }
                 }
+            }
+        }
+    }
+}
+
+/// Apple Weather-style bar: where the day's range sits within the week's.
+private struct TemperatureBar: View {
+    let low: Double?
+    let high: Double?
+    let lowest: Double
+    let highest: Double
+
+    var body: some View {
+        GeometryReader { geo in
+            let span = max(highest - lowest, 1)
+            let start = ((low ?? lowest) - lowest) / span, end = ((high ?? highest) - lowest) / span
+            ZStack(alignment: .leading) {
+                Capsule().fill(.secondary.opacity(0.2))
+                Capsule()
+                    .fill(LinearGradient(colors: [.cyan, .yellow, .orange], startPoint: .leading, endPoint: .trailing))
+                    .frame(width: max(geo.size.width * (end - start), 6))
+                    .offset(x: geo.size.width * start)
             }
         }
     }

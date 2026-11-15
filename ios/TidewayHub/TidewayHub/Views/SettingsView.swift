@@ -4,6 +4,10 @@ struct SettingsView: View {
     @Environment(AppStore.self) private var store
     @AppStorage(SettingsKey.windUnit) private var unitRaw = WindUnit.knots.rawValue
     @AppStorage(SettingsKey.showDiagnostics) private var showDiagnostics = false
+    @AppStorage(SettingsKey.flagAlerts) private var flagAlertsRaw = AlertService.FlagAlerts.off.rawValue
+    @AppStorage(SettingsKey.sewageAlerts) private var sewageAlerts = false
+    @AppStorage(SettingsKey.clubAlerts) private var clubAlerts = false
+    @AppStorage(SettingsKey.homeClub) private var homeClub = ""
 
     var body: some View {
         Form {
@@ -13,6 +17,33 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
             }
+
+            Section {
+                Picker("Flag changes", selection: $flagAlertsRaw) {
+                    ForEach(AlertService.FlagAlerts.allCases) { Text($0.rawValue).tag($0.rawValue) }
+                }
+                Toggle("Sewage discharges nearby", isOn: $sewageAlerts)
+                Toggle("Arriving at my club", isOn: $clubAlerts)
+                if clubAlerts {
+                    Picker("Home club", selection: $homeClub) {
+                        Text("Choose…").tag("")
+                        ForEach(Club.tideway) { Text($0.name).tag($0.name) }
+                        Text("My location (set below)").tag(Club.custom)
+                    }
+                    Button("Set my club to where I am now", systemImage: "location.fill") { useCurrentLocation() }
+                        .disabled(store.location.location == nil)
+                }
+            } header: {
+                Text("Alerts")
+            } footer: {
+                Text(alertsFooter)
+            }
+            .onChange(of: flagAlertsRaw) { _, value in
+                if value != AlertService.FlagAlerts.off.rawValue { enableAlerts() }
+            }
+            .onChange(of: sewageAlerts) { _, on in if on { enableAlerts() } }
+            .onChange(of: clubAlerts) { _, _ in updateGeofence() }
+            .onChange(of: homeClub) { _, _ in updateGeofence() }
 
             Section {
                 FlagLegendRow(colour: .red)
@@ -38,7 +69,7 @@ struct SettingsView: View {
             } header: {
                 Text("Data")
             } footer: {
-                Text("Flags, predictions and levels: Tideway Flow ML pipeline (EA and PLA data, OGL). Weather: Open-Meteo (CC BY 4.0), Met Office UKMO model. Measured wind: aviationweather.gov. Unofficial app; always check the official flag.")
+                Text("Flags, predictions and levels: Tideway Flow ML pipeline (EA and PLA data, OGL). Weather: Open-Meteo (CC BY 4.0), Met Office UKMO model. Measured wind: aviationweather.gov. Kingston flow: Environment Agency (OGL). Storm overflows: Thames Water Open Data. Unofficial app; always check the official flag.")
             }
 
             Section {
@@ -78,8 +109,39 @@ struct SettingsView: View {
             }
         }
         .scrollContentBackground(.hidden)
-        .screenBackground(store.feed?.currentFlag?.flag)
+        .screenBackground(store.displayFlag)
         .navigationTitle("More")
+    }
+}
+
+extension SettingsView {
+    private var alertsFooter: String {
+        var text = "Flag alerts are worked out on your phone from the Richmond gauge just after 06:00 and 18:00. iOS decides exactly when the app can check in the background, so they can be a little late, and they stop if you force-quit the app or turn off Background App Refresh."
+        text += " Arriving at your club shows the flag, forecast and next tide on your lock screen; it needs location access set to Always."
+        return text
+    }
+
+    private func enableAlerts() {
+        Task {
+            await AlertService.shared.requestPermission()
+            AlertService.shared.scheduleRefresh()
+        }
+    }
+
+    private func updateGeofence() {
+        guard clubAlerts else {
+            store.location.monitorHomeClub(nil)
+            return
+        }
+        enableAlerts()
+        store.location.monitorHomeClub(Club.saved)
+    }
+
+    private func useCurrentLocation() {
+        guard let here = store.location.location else { return }
+        UserDefaults.standard.set(here.coordinate.latitude, forKey: SettingsKey.homeClubLatitude)
+        UserDefaults.standard.set(here.coordinate.longitude, forKey: SettingsKey.homeClubLongitude)
+        if homeClub == Club.custom { updateGeofence() } else { homeClub = Club.custom }
     }
 }
 

@@ -5,5 +5,7 @@
 // fill it in, then re-run xcodegen. Without it the app builds fine and simply
 // hides features that need a key.
 WINDY_API_KEY =
+THAMES_WATER_CLIENT_ID =
+THAMES_WATER_CLIENT_SECRET =
 
 #include? "Secrets.xcconfig"
